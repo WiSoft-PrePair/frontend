@@ -1,0 +1,257 @@
+import { useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { motion as Motion } from 'framer-motion'
+import { useAppState } from '../../context/AppStateContext'
+import '../../styles/pages/Rewards.css'
+
+const rewards = [
+  {
+    id: 'coffee-1',
+    name: '스타벅스 아메리카노',
+    description: '면접 준비하면서 마실 커피 한 잔',
+    points: 500,
+    icon: '☕',
+    category: 'cafe',
+  },
+  {
+    id: 'coffee-2',
+    name: '투썸 아이스크림 음료',
+    description: '달콤한 아이스크림 음료로 기분 전환',
+    points: 600,
+    icon: '🍨',
+    category: 'cafe',
+  },
+  {
+    id: 'cu-1',
+    name: 'CU 편의점 2,000원권',
+    description: '든든한 간식으로 에너지 충전',
+    points: 400,
+    icon: '🏪',
+    category: 'convenience',
+  },
+  {
+    id: 'gs-1',
+    name: 'GS25 3,000원권',
+    description: '간단한 식사나 간식 구매',
+    points: 600,
+    icon: '🛒',
+    category: 'convenience',
+  },
+  {
+    id: 'book-1',
+    name: '교보문고 5,000원권',
+    description: '면접 준비 도서 구매',
+    points: 1000,
+    icon: '📚',
+    category: 'study',
+  },
+  {
+    id: 'movie-1',
+    name: 'CGV 영화 관람권',
+    description: '면접 준비 스트레스 해소',
+    points: 2000,
+    icon: '🎬',
+    category: 'entertainment',
+  },
+]
+
+const categories = [
+  { id: 'all', label: '전체' },
+  { id: 'cafe', label: '카페' },
+  { id: 'convenience', label: '편의점' },
+  { id: 'study', label: '자기계발' },
+  { id: 'entertainment', label: '엔터테인먼트' },
+]
+
+export default function RewardShop() {
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { user, purchases, redeemReward } = useAppState()
+  const [selectedCategory, setSelectedCategory] = useState('all')
+  const [selectedReward, setSelectedReward] = useState(null)
+  const [isRedeeming, setIsRedeeming] = useState(false)
+
+  const activeTab = searchParams.get('tab') || 'shop'
+
+  const handleTabChange = (tab) => {
+    setSearchParams({ tab })
+  }
+
+  const filteredRewards = selectedCategory === 'all'
+    ? rewards
+    : rewards.filter((r) => r.category === selectedCategory)
+
+  const handleRedeem = async (reward) => {
+    if (!user || user.points < reward.points) return
+
+    setIsRedeeming(true)
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500)) // Simulate API
+      const result = redeemReward(reward)
+      if (result.success) {
+        navigate('/reward/complete', { state: { reward } })
+      } else {
+        alert(result.reason || '교환에 실패했습니다.')
+      }
+    } finally {
+      setIsRedeeming(false)
+      setSelectedReward(null)
+    }
+  }
+
+  return (
+    <div className="rewards">
+      <div className="rewards__container">
+        <header className="rewards__header">
+          <div>
+            <h1>리워드</h1>
+            <p>포인트로 다양한 혜택을 받아보세요</p>
+          </div>
+          <div className="rewards__points-badge">
+            <span>💰</span>
+            <strong>{user?.points?.toLocaleString() || 0}</strong>
+            <span>포인트</span>
+          </div>
+        </header>
+
+        {/* Tabs */}
+        <div className="reward__tabs">
+          <button
+            className={`reward__tab ${activeTab === 'shop' ? 'reward__tab--active' : ''}`}
+            onClick={() => handleTabChange('shop')}
+          >
+            상점
+          </button>
+          <button
+            className={`reward__tab ${activeTab === 'history' ? 'reward__tab--active' : ''}`}
+            onClick={() => handleTabChange('history')}
+          >
+            교환 내역
+          </button>
+        </div>
+
+        {activeTab === 'shop' ? (
+          <>
+            {/* Categories */}
+            <div className="shop__categories">
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  className={`chip ${selectedCategory === cat.id ? 'chip--active' : ''}`}
+                  onClick={() => setSelectedCategory(cat.id)}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Rewards Grid */}
+            <div className="shop__grid">
+              {filteredRewards.map((reward, idx) => {
+                const canAfford = (user?.points || 0) >= reward.points
+                return (
+                  <Motion.div
+                    key={reward.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.05 }}
+                    className={`shop__item card ${!canAfford ? 'shop__item--disabled' : ''}`}
+                    onClick={() => canAfford && setSelectedReward(reward)}
+                  >
+                    <div className="shop__item-icon">{reward.icon}</div>
+                    <div className="shop__item-info">
+                      <h3>{reward.name}</h3>
+                      <p>{reward.description}</p>
+                      <div className="shop__item-points">
+                        <span>💰</span>
+                        <strong>{reward.points.toLocaleString()}</strong>
+                      </div>
+                    </div>
+                    {!canAfford && (
+                      <div className="shop__item-overlay">
+                        포인트 부족
+                      </div>
+                    )}
+                  </Motion.div>
+                )
+              })}
+            </div>
+          </>
+        ) : (
+          /* History Tab */
+          purchases && purchases.length > 0 ? (
+            <div className="history__list">
+              {purchases.map((purchase) => (
+                <div key={purchase.id} className="history__item card">
+                  <div className="history__icon">{purchase.reward?.icon}</div>
+                  <div className="history__info">
+                    <strong>{purchase.reward?.name}</strong>
+                    <p>{purchase.reward?.description}</p>
+                    <span className="history__date">
+                      {new Date(purchase.purchasedAt).toLocaleDateString('ko-KR', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <div className="history__points">
+                    <span>-{purchase.reward?.points?.toLocaleString()}</span>
+                    <span className="history__points-label">포인트</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rewards__empty card">
+              <span className="rewards__empty-icon">🛒</span>
+              <h3>교환 내역이 없습니다</h3>
+              <p>포인트를 모아 리워드를 교환해보세요!</p>
+              <button className="btn btn--primary" onClick={() => handleTabChange('shop')}>
+                리워드 상점 가기
+              </button>
+            </div>
+          )
+        )}
+
+        {/* Confirmation Modal */}
+        {selectedReward && (
+          <div className="shop__modal-overlay" onClick={() => setSelectedReward(null)}>
+            <Motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="shop__modal card"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="shop__modal-icon">{selectedReward.icon}</div>
+              <h3>{selectedReward.name}</h3>
+              <p>{selectedReward.description}</p>
+              <div className="shop__modal-points">
+                💰 {selectedReward.points.toLocaleString()} 포인트
+              </div>
+
+              <div className="shop__modal-actions">
+                <button
+                  className="btn btn--ghost"
+                  onClick={() => setSelectedReward(null)}
+                  disabled={isRedeeming}
+                >
+                  취소
+                </button>
+                <button
+                  className="btn btn--primary"
+                  onClick={() => handleRedeem(selectedReward)}
+                  disabled={isRedeeming}
+                >
+                  {isRedeeming ? '교환 중...' : '교환하기'}
+                </button>
+              </div>
+            </Motion.div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/tts",
+      "destination": "/api/tts"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://prepair.wisoft.dev/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

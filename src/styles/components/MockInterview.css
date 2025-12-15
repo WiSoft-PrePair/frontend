@@ -1,0 +1,864 @@
+/* ===========================================
+   Mock Interview Component Styles
+   =========================================== */
+
+.mock-interview {
+  width: 100%;
+}
+
+/* Ready Phase */
+.mock-interview__ready {
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.mock-interview__intro {
+  text-align: center;
+  padding: var(--spacing-xl);
+}
+
+.mock-interview__intro-icon {
+  font-size: 3.5rem;
+  margin-bottom: var(--spacing-md);
+  line-height: 1;
+}
+
+.mock-interview__intro h2 {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  color: var(--color-dark-800);
+  margin-bottom: var(--spacing-sm);
+}
+
+.mock-interview__intro > p {
+  color: var(--color-dark-400);
+  line-height: 1.6;
+  margin-bottom: var(--spacing-xl);
+  font-size: var(--font-size-sm);
+}
+
+.mock-interview__features {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
+  text-align: left;
+}
+
+.mock-interview__feature {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+  background: var(--color-dark-50);
+  border-radius: var(--radius-md);
+}
+
+.mock-interview__feature-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.mock-interview__feature > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.mock-interview__feature strong {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-dark-800);
+  margin-bottom: 2px;
+}
+
+.mock-interview__feature p {
+  font-size: var(--font-size-xs);
+  color: var(--color-dark-400);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* 질문 개수 설정 */
+.mock-interview__settings {
+  margin-bottom: var(--spacing-lg);
+  text-align: center;
+}
+
+.mock-interview__settings-label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-dark-600);
+  margin-bottom: var(--spacing-sm);
+}
+
+.mock-interview__question-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  background: var(--color-dark-100);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.mock-interview__count-btn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-dark-600);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.mock-interview__count-btn:hover:not(:disabled) {
+  background: var(--color-dark-200);
+  color: var(--color-dark-800);
+}
+
+.mock-interview__count-btn:disabled {
+  color: var(--color-dark-300);
+  cursor: not-allowed;
+}
+
+.mock-interview__count-input {
+  width: 60px;
+  height: 40px;
+  text-align: center;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-dark-800);
+  background: #ffffff;
+  border: none;
+  border-left: 1px solid var(--color-dark-200);
+  border-right: 1px solid var(--color-dark-200);
+  -moz-appearance: textfield;
+}
+
+.mock-interview__count-input::-webkit-outer-spin-button,
+.mock-interview__count-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.mock-interview__count-input:focus {
+  outline: none;
+  background: var(--color-blue-50);
+}
+
+.mock-interview__count-hint {
+  display: block;
+  margin-top: var(--spacing-xs);
+  font-size: var(--font-size-xs);
+  color: var(--color-dark-400);
+}
+
+.mock-interview__voice-select {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 16px; /* iOS 줌 방지 */
+  font-family: inherit;
+  color: var(--color-dark-800);
+  background-color: #ffffff;
+  border: 1.5px solid var(--color-dark-200);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.mock-interview__voice-select:hover {
+  border-color: var(--color-dark-300);
+}
+
+.mock-interview__voice-select:focus {
+  outline: none;
+  border-color: var(--color-blue-500);
+  box-shadow: 0 0 0 3px var(--color-blue-100);
+}
+
+/* 옵션 스타일 (일부 브라우저에서만 적용) */
+.mock-interview__voice-select option {
+  padding: var(--spacing-sm);
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+
+.mock-interview__intro--loading {
+  min-height: 400px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* 로딩 프로그레스 */
+.mock-interview__loading-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-lg);
+  padding: 0 var(--spacing-xl);
+}
+
+.mock-interview__loading-progress .mock-interview__progress-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--color-dark-200);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.mock-interview__loading-progress .mock-interview__progress-fill {
+  height: 100%;
+  background: var(--gradient-primary);
+  border-radius: var(--radius-full);
+  transition: width 0.3s ease;
+}
+
+.mock-interview__loading-progress span {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-dark-600);
+  min-width: 40px;
+  text-align: right;
+}
+
+.mock-interview__cancel-btn {
+  margin-top: var(--spacing-lg);
+}
+
+/* 질문 숨김 상태 */
+.mock-interview__question-hidden {
+  color: var(--color-dark-400);
+  font-style: italic;
+  font-size: var(--font-size-base);
+}
+
+.mock-interview__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+  background: var(--color-blue-50);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-xl);
+  text-align: left;
+}
+
+.mock-interview__notice span {
+  font-size: 1.25rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.mock-interview__notice p {
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-500);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Interview Session */
+.mock-interview__session {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.mock-interview__video-container {
+  position: relative;
+  width: 100%;
+  min-height: 400px;
+  margin: 0 auto;
+  aspect-ratio: 4/3;
+  background: var(--color-dark-800);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.mock-interview__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); /* 거울 모드 */
+  background: #000;
+}
+
+.mock-interview__camera-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+}
+
+.mock-interview__camera-error span {
+  font-size: 2rem;
+}
+
+.mock-interview__recording-badge {
+  position: absolute;
+  top: var(--spacing-md);
+  left: var(--spacing-md);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(239, 68, 68, 0.9);
+  color: white;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  border-radius: var(--radius-full);
+}
+
+.mock-interview__recording-dot {
+  width: 8px;
+  height: 8px;
+  background: white;
+  border-radius: 50%;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.mock-interview__countdown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.mock-interview__countdown span {
+  font-size: 8rem;
+  font-weight: 700;
+  color: white;
+  animation: countdownPop 0.5s ease-out;
+}
+
+@keyframes countdownPop {
+  0% { transform: scale(1.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* 오디오 레벨 미터 */
+.mock-interview__audio-meter {
+  position: absolute;
+  bottom: var(--spacing-md);
+  right: var(--spacing-md);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(0, 0, 0, 0.8);
+  border-radius: var(--radius-full);
+  min-width: 160px;
+}
+
+.mock-interview__audio-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.mock-interview__audio-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.mock-interview__audio-level {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981 0%, #10b981 60%, #f59e0b 80%, #ef4444 100%);
+  border-radius: var(--radius-full);
+  transition: width 0.1s ease-out;
+}
+
+.mock-interview__audio-label {
+  font-size: var(--font-size-xs);
+  color: rgba(255, 255, 255, 0.8);
+  white-space: nowrap;
+}
+
+.mock-interview__speaking {
+  position: absolute;
+  bottom: var(--spacing-md);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  font-size: var(--font-size-sm);
+  border-radius: var(--radius-full);
+}
+
+.mock-interview__speaking-waves {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+}
+
+.mock-interview__speaking-waves span {
+  width: 3px;
+  height: 100%;
+  background: var(--color-blue-400);
+  border-radius: 2px;
+  animation: wave 0.5s ease-in-out infinite;
+}
+
+.mock-interview__speaking-waves span:nth-child(1) { animation-delay: 0s; }
+.mock-interview__speaking-waves span:nth-child(2) { animation-delay: 0.1s; }
+.mock-interview__speaking-waves span:nth-child(3) { animation-delay: 0.2s; }
+.mock-interview__speaking-waves span:nth-child(4) { animation-delay: 0.3s; }
+.mock-interview__speaking-waves span:nth-child(5) { animation-delay: 0.4s; }
+
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.5); }
+  50% { transform: scaleY(1); }
+}
+
+/* Controls */
+.mock-interview__controls {
+  width: 100%;
+  padding: var(--spacing-lg);
+}
+
+.mock-interview__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-400);
+}
+
+.mock-interview__progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--color-dark-200);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.mock-interview__progress-fill {
+  height: 100%;
+  background: var(--gradient-primary);
+  border-radius: var(--radius-full);
+  transition: width 0.3s ease;
+}
+
+.mock-interview__question {
+  margin-bottom: var(--spacing-md);
+}
+
+.mock-interview__question .badge {
+  margin-bottom: var(--spacing-sm);
+}
+
+.mock-interview__question p {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-dark-800);
+  line-height: 1.5;
+}
+
+.mock-interview__actions {
+  display: flex;
+  justify-content: center;
+}
+
+.mock-interview__waiting {
+  color: var(--color-dark-400);
+  font-size: var(--font-size-sm);
+}
+
+/* Feedback Phase */
+.mock-interview__feedback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.mock-interview__score-card {
+  padding: var(--spacing-xl);
+}
+
+.mock-interview__score-main {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xl);
+  margin-bottom: var(--spacing-xl);
+}
+
+.mock-interview__score-circle {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mock-interview__score-circle::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: conic-gradient(var(--score-color) calc(var(--score-color) * 3.6deg), var(--color-dark-200) 0);
+  z-index: -1;
+}
+
+.mock-interview__score-value {
+  font-size: var(--font-size-3xl);
+  font-weight: 700;
+  color: var(--color-dark-800);
+}
+
+.mock-interview__score-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-400);
+}
+
+.mock-interview__score-info h3 {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--color-dark-800);
+  margin-bottom: var(--spacing-xs);
+}
+
+.mock-interview__score-info p {
+  color: var(--color-dark-500);
+}
+
+.mock-interview__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--spacing-md);
+}
+
+.mock-interview__metric {
+  padding: var(--spacing-md);
+  background: white;
+  border-radius: var(--radius-md);
+}
+
+.mock-interview__metric-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-sm);
+  font-size: var(--font-size-sm);
+}
+
+.mock-interview__metric-bar {
+  height: 6px;
+  background: var(--color-dark-200);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.mock-interview__metric-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width 0.5s ease;
+}
+
+/* Feedback Grid */
+.mock-interview__feedback-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--spacing-md);
+}
+
+.mock-interview__feedback-card {
+  padding: var(--spacing-lg);
+}
+
+.mock-interview__feedback-card h4 {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-dark-800);
+  margin-bottom: var(--spacing-sm);
+}
+
+.mock-interview__feedback-card ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mock-interview__feedback-card li {
+  position: relative;
+  padding-left: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-500);
+  line-height: 1.5;
+}
+
+.mock-interview__feedback-card li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 6px;
+  height: 6px;
+  background: var(--color-rose-400);
+  border-radius: 50%;
+}
+
+/* Tips */
+.mock-interview__tips {
+  padding: var(--spacing-lg);
+}
+
+.mock-interview__tips h4 {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-dark-800);
+  margin-bottom: var(--spacing-sm);
+}
+
+.mock-interview__tips ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mock-interview__tips li {
+  padding: var(--spacing-sm) 0;
+  padding-left: var(--spacing-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-500);
+  border-bottom: 1px solid var(--color-dark-100);
+  position: relative;
+}
+
+.mock-interview__tips li:last-child {
+  border-bottom: none;
+}
+
+.mock-interview__tips li::before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  color: var(--color-blue-500);
+}
+
+/* Answers List */
+.mock-interview__answers {
+  padding: var(--spacing-lg);
+}
+
+.mock-interview__answers h4 {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-dark-800);
+  margin-bottom: var(--spacing-md);
+}
+
+.mock-interview__answer-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.mock-interview__answer-item {
+  padding: var(--spacing-md);
+  background: var(--color-dark-50);
+  border-radius: var(--radius-md);
+}
+
+.mock-interview__answer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-sm);
+}
+
+.mock-interview__answer-time {
+  font-size: var(--font-size-xs);
+  color: var(--color-dark-400);
+}
+
+.mock-interview__answer-item p {
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-600);
+  margin: 0;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .mock-interview {
+    padding: var(--spacing-sm);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mock-interview__ready {
+    max-width: 100%;
+  }
+
+  .mock-interview__intro {
+    padding: var(--spacing-md);
+  }
+
+  .mock-interview__intro-icon {
+    font-size: 2.5rem;
+  }
+
+  .mock-interview__intro h2 {
+    font-size: var(--font-size-lg);
+  }
+
+  .mock-interview__intro > p {
+    font-size: var(--font-size-xs);
+  }
+
+  .mock-interview__features {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-sm);
+  }
+
+  .mock-interview__feature {
+    padding: var(--spacing-sm);
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--spacing-xs);
+  }
+
+  .mock-interview__feature-icon {
+    font-size: 1.25rem;
+  }
+
+  .mock-interview__feature strong {
+    font-size: var(--font-size-xs);
+  }
+
+  .mock-interview__feature p {
+    display: none;
+  }
+
+  .mock-interview__settings {
+    margin-bottom: var(--spacing-md);
+  }
+
+  .mock-interview__settings-label {
+    font-size: var(--font-size-xs);
+  }
+
+  .mock-interview__count-btn {
+    width: 36px;
+    height: 36px;
+    font-size: var(--font-size-base);
+  }
+
+  .mock-interview__count-input {
+    width: 50px;
+    height: 36px;
+    font-size: var(--font-size-base);
+  }
+
+  /* 모바일 드롭다운 스타일 */
+  .mock-interview__voice-select {
+    padding: 12px 36px 12px 12px;
+    font-size: 16px; /* iOS 줌 방지 필수 */
+    background-position: right 12px center;
+    min-height: 48px; /* 터치 영역 확보 */
+    line-height: 1.4;
+  }
+
+  .mock-interview__notice {
+    padding: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+  }
+
+  .mock-interview__notice p {
+    font-size: var(--font-size-xs);
+  }
+
+  .mock-interview__session {
+    gap: var(--spacing-sm);
+  }
+
+  .mock-interview__video-container {
+    aspect-ratio: 4/3;
+    min-height: 280px;
+  }
+
+  .mock-interview__controls {
+    padding: var(--spacing-md);
+  }
+
+  .mock-interview__question p {
+    font-size: var(--font-size-base);
+  }
+
+  .mock-interview__audio-meter {
+    min-width: 120px;
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  .mock-interview__audio-label {
+    font-size: 10px;
+  }
+
+  .mock-interview__metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mock-interview__feedback-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mock-interview__score-main {
+    flex-direction: column;
+    text-align: center;
+    gap: var(--spacing-md);
+  }
+
+  .mock-interview__score-card {
+    padding: var(--spacing-md);
+  }
+
+  .mock-interview__score-circle {
+    width: 80px;
+    height: 80px;
+  }
+
+  .mock-interview__score-value {
+    font-size: var(--font-size-2xl);
+  }
+
+  .mock-interview__feedback-card,
+  .mock-interview__tips,
+  .mock-interview__answers {
+    padding: var(--spacing-md);
+  }
+}
