@@ -207,7 +207,7 @@
 /* Footer */
 .footer {
   margin-top: auto;
-  padding: var(--spacing-3xl) 0 var(--spacing-xl);
+  padding: var(--spacing-xl) 0 var(--spacing-md);
   background: var(--color-dark-800);
   color: #ffffff;
 }
@@ -218,7 +218,7 @@
   padding: 0 var(--spacing-lg);
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
-  gap: var(--spacing-2xl);
+  gap: var(--spacing-lg);
 }
 
 .footer__brand {
@@ -228,45 +228,45 @@
 .footer__logo-wrap {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-md);
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-sm);
 }
 
 .footer__logo {
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 20px;
   object-fit: contain;
   filter: brightness(0) invert(1);
 }
 
 .footer__brand-name {
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
 }
 
 .footer__tagline {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   color: var(--color-dark-400);
-  line-height: var(--line-height-relaxed);
+  line-height: var(--line-height-normal);
 }
 
 .footer__links {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-xs);
 }
 
 .footer__links h4 {
-  font-size: var(--font-size-xs);
+  font-size: 10px;
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-bottom: var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
   color: var(--color-dark-300);
 }
 
 .footer__links a {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   color: var(--color-dark-400);
   text-decoration: none;
   transition: color var(--transition-fast);
@@ -281,10 +281,10 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-top: var(--spacing-xl);
-  margin-top: var(--spacing-xl);
+  padding-top: var(--spacing-md);
+  margin-top: var(--spacing-md);
   border-top: 1px solid var(--color-dark-600);
-  font-size: var(--font-size-xs);
+  font-size: 10px;
   color: var(--color-dark-500);
 }
 
@@ -396,7 +396,7 @@
 
   .footer__container {
     grid-template-columns: 1fr;
-    gap: var(--spacing-xl);
+    gap: var(--spacing-md);
   }
 
   .footer__links {
