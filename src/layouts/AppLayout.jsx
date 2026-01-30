@@ -56,72 +56,74 @@ export default function AppLayout() {
       {/* Gradient Background */}
       <div className="shell__gradient" aria-hidden="true"/>
 
-      <header className={`header ${isScrolled ? 'header--scrolled' : ''} ${isLanding ? 'header--transparent' : ''}`}>
-        <div className="header__container">
-          <a href={user ? '/mypage' : '/'} onClick={handleLogoClick} className="header__brand">
-            <img src={logo} alt="PrePair" className="header__logo"/>
-            <span className="header__brand-name">PrePair</span>
-          </a>
+      {!isLanding && (
+        <header className={`header ${isScrolled ? 'header--scrolled' : ''}`}>
+          <div className="header__container">
+            <a href={user ? '/mypage' : '/'} onClick={handleLogoClick} className="header__brand">
+              <img src={logo} alt="PrePair" className="header__logo"/>
+              <span className="header__brand-name">PrePair</span>
+            </a>
 
-          {showNavElements && (
-            <>
-              <nav className={`nav ${isNavOpen ? 'nav--open' : ''}`} aria-label="주요 메뉴">
-                {navItems.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    className={activeLinkClass}
-                    end={item.to === '/mypage'}
+            {showNavElements && (
+              <>
+                <nav className={`nav ${isNavOpen ? 'nav--open' : ''}`} aria-label="주요 메뉴">
+                  {navItems.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      className={activeLinkClass}
+                      end={item.to === '/mypage'}
+                    >
+                      <span className="nav__label">{item.label}</span>
+                    </NavLink>
+                  ))}
+                </nav>
+
+                <div className="header__actions">
+                  {user && (
+                    <div className="header__user">
+                      <span className="header__points">
+                        💰 {user.points?.toLocaleString() || 0}
+                      </span>
+                      <span className="header__name">{user.name}님</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="btn btn--ghost btn--sm"
                   >
-                    <span className="nav__label">{item.label}</span>
-                  </NavLink>
-                ))}
-              </nav>
+                    로그아웃
+                  </button>
+                  <button
+                    type="button"
+                    className="nav-toggle"
+                    aria-controls="primary-navigation"
+                    aria-expanded={isNavOpen}
+                    onClick={() => setIsNavOpen((prev) => !prev)}
+                  >
+                    <span className="nav-toggle__bar"/>
+                    <span className="nav-toggle__bar"/>
+                    <span className="nav-toggle__bar"/>
+                    <span className="sr-only">{isNavOpen ? '메뉴 닫기' : '메뉴 열기'}</span>
+                  </button>
+                </div>
+              </>
+            )}
 
+            {showAuthCtas && !isLanding && (
               <div className="header__actions">
-                {user && (
-                  <div className="header__user">
-                    <span className="header__points">
-                      💰 {user.points?.toLocaleString() || 0}
-                    </span>
-                    <span className="header__name">{user.name}님</span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="btn btn--ghost btn--sm"
-                >
-                  로그아웃
-                </button>
-                <button
-                  type="button"
-                  className="nav-toggle"
-                  aria-controls="primary-navigation"
-                  aria-expanded={isNavOpen}
-                  onClick={() => setIsNavOpen((prev) => !prev)}
-                >
-                  <span className="nav-toggle__bar"/>
-                  <span className="nav-toggle__bar"/>
-                  <span className="nav-toggle__bar"/>
-                  <span className="sr-only">{isNavOpen ? '메뉴 닫기' : '메뉴 열기'}</span>
-                </button>
+                <Link to="/auth?mode=login" className="btn btn--ghost">
+                  로그인
+                </Link>
+                <Link to="/auth?mode=signup" className="btn btn--primary">
+                  시작하기
+                </Link>
               </div>
-            </>
-          )}
-
-          {showAuthCtas && (
-            <div className="header__actions">
-              <Link to="/auth?mode=login" className="btn btn--ghost">
-                로그인
-              </Link>
-              <Link to="/auth?mode=signup" className="btn btn--primary">
-                시작하기
-              </Link>
-            </div>
-          )}
-        </div>
-      </header>
+            )}
+          </div>
+        </header>
+      )}
 
       <main className="main">
         <Motion.div
