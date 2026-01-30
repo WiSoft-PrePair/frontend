@@ -6,6 +6,7 @@ import useMediaQuery from '../hooks/useMediaQuery'
 import Dropdown from '../components/Dropdown'
 import logo from '../assets/logo.png'
 import '../styles/pages/Auth.css'
+import { findIdByEmail, sendPasswordResetEmail, resetPassword } from '../utils/authApi'
 
 const steps = [
   { id: 'account', label: '기본 정보' },
@@ -53,6 +54,16 @@ export default function AuthPage() {
     notificationKakao: false,
   })
 
+const [showFindId, setShowFindId] = useState(false)
+const [findIdEmail, setFindIdEmail] = useState('')
+const [findIdResult, setFindIdResult] = useState(null) // null, 'found', 'notFound'
+const [isFindingId, setIsFindingId] = useState(false)
+
+const [forgotPasswordStep, setForgotPasswordStep] = useState(1) // 1: 이메일, 2: 코드, 3: 새 비밀번호
+const [forgotCode, setForgotCode] = useState('')
+const [forgotNewPassword, setForgotNewPassword] = useState('')
+const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
+
   useEffect(() => {
     const paramMode = searchParams.get('mode')
     if (paramMode && (paramMode === 'login' || paramMode === 'signup')) {
@@ -87,6 +98,79 @@ export default function AuthPage() {
       setIsLoading(false)
     }
   }
+
+  // 아이디 찾기
+const handleFindId = async () => {
+  if (!findIdEmail) return
+  
+  setIsFindingId(true)
+  setError('')
+  
+  try {
+    const result = await findIdByEmail(findIdEmail)
+    setFindIdResult(result.exists ? 'found' : 'notFound')
+  } catch (err) {
+    setError(err.message || '아이디 찾기에 실패했습니다.')
+    setFindIdResult(null)
+  } finally {
+    setIsFindingId(false)
+  }
+}
+
+// 비밀번호 찾기 1단계: 이메일 발송
+const handleSendPasswordResetEmail = async () => {
+  if (!forgotEmail) return
+  
+  setIsLoading(true)
+  setError('')
+  
+  try {
+    await sendPasswordResetEmail(forgotEmail)
+    setForgotPasswordStep(2) // 다음 단계로
+    setForgotEmailSent(true)
+  } catch (err) {
+    setError(err.message || '이메일 발송에 실패했습니다.')
+  } finally {
+    setIsLoading(false)
+  }
+}
+
+
+const handleVerifyCode = () => {
+  if (!forgotCode) return
+  setForgotPasswordStep(3)
+}
+
+const handleResetPassword = async () => {
+  if (!forgotNewPassword || !forgotPasswordConfirm) return
+  if (forgotNewPassword !== forgotPasswordConfirm) {
+    setError('비밀번호가 일치하지 않습니다.')
+    return
+  }
+  if (forgotNewPassword.length < 6) {
+    setError('비밀번호는 6자 이상이어야 합니다.')
+    return
+  }
+  
+  setIsLoading(true)
+  setError('')
+  
+  try {
+    await resetPassword(forgotEmail, forgotCode, forgotNewPassword)
+    setShowForgotPassword(false)
+    setForgotPasswordStep(1)
+    setForgotEmail('')
+    setForgotCode('')
+    setForgotNewPassword('')
+    setForgotPasswordConfirm('')
+    setForgotEmailSent(false)
+    alert('비밀번호가 성공적으로 재설정되었습니다.')
+  } catch (err) {
+    setError(err.message || '비밀번호 재설정에 실패했습니다.')
+  } finally {
+    setIsLoading(false)
+  }
+}
 
   const handleSignup = async (e) => {
     e.preventDefault()
@@ -506,10 +590,22 @@ export default function AuthPage() {
               </div>
 
               <p className="auth__forgot-password">
-                <button type="button" className="auth__forgot-link" onClick={() => setShowForgotPassword(true)}>
-                  비밀번호를 잊으셨나요?
-                </button>
-              </p>
+  <button 
+    type="button" 
+    className="auth__forgot-link" 
+    onClick={() => setShowFindId(true)}
+  >
+    아이디 찾기
+  </button>
+  {' | '}
+  <button 
+    type="button" 
+    className="auth__forgot-link" 
+    onClick={() => setShowForgotPassword(true)}
+  >
+    비밀번호를 잊으셨나요?
+  </button>
+</p>
 
               <button
                 type="submit"
@@ -531,83 +627,270 @@ export default function AuthPage() {
         </div>
       </div>
 
-      {/* Forgot Password Modal */}
-      <AnimatePresence>
-        {showForgotPassword && (
-          <Motion.div
-            className="auth__modal-overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => {
-              setShowForgotPassword(false)
-              setForgotEmail('')
-              setForgotEmailSent(false)
-            }}
-          >
-            <Motion.div
-              className="auth__modal"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              onClick={(e) => e.stopPropagation()}
+      {/* 아이디 찾기 모달 */}
+<AnimatePresence>
+  {showFindId && (
+    <Motion.div
+      className="auth__modal-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={() => {
+        setShowFindId(false)
+        setFindIdEmail('')
+        setFindIdResult(null)
+      }}
+    >
+      <Motion.div
+        className="auth__modal"
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3>아이디 찾기</h3>
+        {findIdResult === 'found' ? (
+          <div className="auth__modal-success">
+            <span>✓</span>
+            <p>입력하신 이메일로 가입된 계정이 있습니다.</p>
+            <button
+              type="button"
+              className="btn btn--primary btn--block"
+              onClick={() => {
+                setShowFindId(false)
+                setFindIdEmail('')
+                setFindIdResult(null)
+              }}
             >
-              <h3>비밀번호 찾기</h3>
-              {forgotEmailSent ? (
-                <div className="auth__modal-success">
-                  <span>✉️</span>
-                  <p>입력하신 이메일로 비밀번호 재설정 링크를 보냈습니다.</p>
-                  <button
-                    type="button"
-                    className="btn btn--primary btn--block"
-                    onClick={() => {
-                      setShowForgotPassword(false)
-                      setForgotEmail('')
-                      setForgotEmailSent(false)
-                    }}
-                  >
-                    확인
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <p>가입한 이메일을 입력해주세요.</p>
-                  <div className="form-group">
-                    <input
-                      type="email"
-                      className="form-input"
-                      placeholder="이메일 주소"
-                      value={forgotEmail}
-                      onChange={(e) => setForgotEmail(e.target.value)}
-                      autoFocus
-                    />
-                  </div>
-                  <div className="auth__modal-buttons">
-                    <button
-                      type="button"
-                      className="btn btn--secondary"
-                      onClick={() => {
-                        setShowForgotPassword(false)
-                        setForgotEmail('')
-                      }}
-                    >
-                      취소
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--primary"
-                      disabled={!forgotEmail}
-                      onClick={() => setForgotEmailSent(true)}
-                    >
-                      전송
-                    </button>
-                  </div>
-                </>
-              )}
-            </Motion.div>
-          </Motion.div>
+              확인
+            </button>
+          </div>
+        ) : findIdResult === 'notFound' ? (
+          <div className="auth__modal-error">
+            <span>✗</span>
+            <p>입력하신 이메일로 가입된 계정을 찾을 수 없습니다.</p>
+            <button
+              type="button"
+              className="btn btn--primary btn--block"
+              onClick={() => {
+                setFindIdResult(null)
+                setFindIdEmail('')
+              }}
+            >
+              다시 시도
+            </button>
+          </div>
+        ) : (
+          <>
+            <p>가입한 이메일을 입력해주세요.</p>
+            <div className="form-group">
+              <input
+                type="email"
+                className="form-input"
+                placeholder="이메일 주소"
+                value={findIdEmail}
+                onChange={(e) => setFindIdEmail(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="auth__modal-buttons">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => {
+                  setShowFindId(false)
+                  setFindIdEmail('')
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={!findIdEmail || isFindingId}
+                onClick={handleFindId}
+              >
+                {isFindingId ? '확인 중...' : '확인'}
+              </button>
+            </div>
+          </>
         )}
-      </AnimatePresence>
+      </Motion.div>
+    </Motion.div>
+  )}
+</AnimatePresence>
+{/* Forgot Password Modal */}
+<AnimatePresence>
+  {showForgotPassword && (
+    <Motion.div
+      className="auth__modal-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={() => {
+        setShowForgotPassword(false)
+        setForgotEmail('')
+        setForgotCode('')
+        setForgotNewPassword('')
+        setForgotPasswordConfirm('')
+        setForgotEmailSent(false)
+        setForgotPasswordStep(1)
+      }}
+    >
+      <Motion.div
+        className="auth__modal"
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3>비밀번호 찾기</h3>
+        
+        {/* 1단계: 이메일 입력 */}
+        {forgotPasswordStep === 1 && (
+          <>
+            <p>가입한 이메일을 입력해주세요.</p>
+            <div className="form-group">
+              <input
+                type="email"
+                className="form-input"
+                placeholder="이메일 주소"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                autoFocus
+              />
+            </div>
+            {error && (
+              <div className="auth__error" style={{ marginBottom: '1rem' }}>
+                <span>⚠️</span> {error}
+              </div>
+            )}
+            <div className="auth__modal-buttons">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => {
+                  setShowForgotPassword(false)
+                  setForgotEmail('')
+                  setError('')
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={!forgotEmail || isLoading}
+                onClick={handleSendPasswordResetEmail}
+              >
+                {isLoading ? '전송 중...' : '인증 메일 보내기'}
+              </button>
+            </div>
+          </>
+        )}
+        
+        {/* 2단계: 인증 코드 입력 */}
+        {forgotPasswordStep === 2 && (
+          <>
+            <p>이메일로 전송된 인증 코드를 입력해주세요.</p>
+            <div className="form-group">
+              <input
+                type="text"
+                className="form-input"
+                placeholder="인증 코드"
+                value={forgotCode}
+                onChange={(e) => setForgotCode(e.target.value)}
+                autoFocus
+              />
+            </div>
+            {error && (
+              <div className="auth__error" style={{ marginBottom: '1rem' }}>
+                <span>⚠️</span> {error}
+              </div>
+            )}
+            <div className="auth__modal-buttons">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => {
+                  setForgotPasswordStep(1)
+                  setForgotCode('')
+                }}
+              >
+                이전
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={!forgotCode}
+                onClick={handleVerifyCode}
+              >
+                다음
+              </button>
+            </div>
+          </>
+        )}
+        
+        {/* 3단계: 새 비밀번호 입력 */}
+        {forgotPasswordStep === 3 && (
+          <>
+            <p>새 비밀번호를 입력해주세요.</p>
+            <div className="form-group">
+              <label className="form-label">새 비밀번호</label>
+              <input
+                type="password"
+                className="form-input"
+                placeholder="6자 이상, 특수문자 포함"
+                value={forgotNewPassword}
+                onChange={(e) => setForgotNewPassword(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">비밀번호 확인</label>
+              <input
+                type="password"
+                className={`form-input ${forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm ? 'form-input--error' : ''}`}
+                placeholder="비밀번호 확인"
+                value={forgotPasswordConfirm}
+                onChange={(e) => setForgotPasswordConfirm(e.target.value)}
+              />
+              {forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm && (
+                <p className="form-error">비밀번호가 일치하지 않습니다.</p>
+              )}
+            </div>
+            {error && (
+              <div className="auth__error" style={{ marginBottom: '1rem' }}>
+                <span>⚠️</span> {error}
+              </div>
+            )}
+            <div className="auth__modal-buttons">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => {
+                  setForgotPasswordStep(2)
+                  setForgotNewPassword('')
+                  setForgotPasswordConfirm('')
+                }}
+              >
+                이전
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={!forgotNewPassword || !forgotPasswordConfirm || isLoading}
+                onClick={handleResetPassword}
+              >
+                {isLoading ? '재설정 중...' : '비밀번호 재설정'}
+              </button>
+            </div>
+          </>
+        )}
+      </Motion.div>
+    </Motion.div>
+  )}
+</AnimatePresence>
     </div>
   )
 }

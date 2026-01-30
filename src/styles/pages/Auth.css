@@ -583,3 +583,22 @@
     font-size: var(--font-size-xs);
   }
 }
+
+/* 아이디 찾기 결과 에러 스타일 */
+.auth__modal-error {
+  text-align: center;
+}
+
+.auth__modal-error span {
+  font-size: 48px;
+  display: block;
+  margin-bottom: var(--spacing-md);
+  color: var(--color-error);
+}
+
+.auth__modal-error p {
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-600);
+  margin-bottom: var(--spacing-lg);
+  line-height: var(--line-height-relaxed);
+}
