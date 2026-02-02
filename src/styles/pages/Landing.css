@@ -23,6 +23,17 @@
     background-position: 0 90%;
     padding: 0 0.2em;
     border-radius: var(--radius-sm);
+    position: relative;
+    animation: gradient-shift 3s ease-in-out infinite;
+}
+
+@keyframes gradient-shift {
+    0%, 100% {
+        background-position: 0 90%;
+    }
+    50% {
+        background-position: 100% 90%;
+    }
 }
 
 .mobile-only { display: none !important; }
@@ -37,9 +48,20 @@
     height: 100%;
     background-image: radial-gradient(var(--color-border-soft) 1px, transparent 1px);
     background-size: 32px 32px;
+    background-position: 0 0;
     z-index: 0;
     pointer-events: none;
     opacity: 0.6;
+    animation: pattern-drift 20s linear infinite;
+}
+
+@keyframes pattern-drift {
+    0% {
+        background-position: 0 0;
+    }
+    100% {
+        background-position: 64px 64px;
+    }
 }
 
 /* =========================================
@@ -81,11 +103,22 @@
     font-size: var(--font-size-sm);
     box-shadow: var(--shadow-sm);
     transition: var(--transition-normal);
+    animation: badge-float 3s ease-in-out infinite;
+}
+
+@keyframes badge-float {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-5px);
+    }
 }
 
 .hero-content .badge:hover {
-    transform: translateY(-2px);
+    transform: translateY(-2px) scale(1.05);
     box-shadow: var(--shadow-md);
+    animation: none;
 }
 
 .hero-title {
@@ -167,6 +200,16 @@
 .btn-kakao:hover {
     background: #FDD835;
     box-shadow: 0 4px 16px rgba(253, 216, 53, 0.4);
+    animation: kakao-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes kakao-glow {
+    0%, 100% {
+        box-shadow: 0 4px 16px rgba(253, 216, 53, 0.4);
+    }
+    50% {
+        box-shadow: 0 4px 24px rgba(253, 216, 53, 0.6);
+    }
 }
 
 .btn-email { 
@@ -216,6 +259,8 @@
     background: var(--gradient-primary);
     opacity: 0;
     transition: var(--transition-normal);
+    transform: scaleX(0);
+    transform-origin: left;
 }
 
 .feature-card:hover { 
@@ -226,6 +271,8 @@
 
 .feature-card:hover::before {
     opacity: 1;
+    transform: scaleX(1);
+    transition: transform 0.4s ease-out, opacity 0.3s ease-out;
 }
 
 .card-icon { 
@@ -233,11 +280,23 @@
     margin-bottom: var(--spacing-md);
     filter: grayscale(0.2);
     transition: var(--transition-normal);
+    display: inline-block;
+    animation: icon-bounce 2s ease-in-out infinite;
+}
+
+@keyframes icon-bounce {
+    0%, 100% {
+        transform: translateY(0) rotate(0deg);
+    }
+    50% {
+        transform: translateY(-3px) rotate(5deg);
+    }
 }
 
 .feature-card:hover .card-icon {
-    transform: scale(1.1);
+    transform: scale(1.15) rotate(5deg);
     filter: grayscale(0);
+    animation: none;
 }
 
 .card-info h3 { 
@@ -286,10 +345,27 @@
     background: var(--color-border);
     border-radius: var(--radius-sm);
     transition: var(--transition-normal);
+    animation: bar-grow 1.5s ease-out;
+}
+
+@keyframes bar-grow {
+    from {
+        height: 0;
+    }
 }
 
 .graph-ui .bar.active { 
     background: var(--gradient-primary);
+    animation: bar-pulse 2s ease-in-out infinite;
+}
+
+@keyframes bar-pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.8;
+    }
 }
 
 .cam-ui { 
@@ -368,6 +444,19 @@
     color: var(--color-border);
     margin-top: var(--spacing-2xl);
     font-weight: var(--font-weight-bold);
+    animation: arrow-slide 2s ease-in-out infinite;
+    display: inline-block;
+}
+
+@keyframes arrow-slide {
+    0%, 100% {
+        transform: translateX(0);
+        opacity: 0.6;
+    }
+    50% {
+        transform: translateX(10px);
+        opacity: 1;
+    }
 }
 
 /* CTA */
@@ -389,6 +478,17 @@
     right: 0;
     height: 6px;
     background: var(--gradient-primary);
+    animation: gradient-flow 3s ease-in-out infinite;
+    background-size: 200% 100%;
+}
+
+@keyframes gradient-flow {
+    0%, 100% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
 }
 
 .cta-actions {
@@ -598,9 +698,18 @@
         font-size: var(--font-size-xs);
         color: var(--color-text-muted);
         margin-top: var(--spacing-sm);
-        animation: blink 2s infinite;
+        animation: blink 2s infinite, slide-hint 3s ease-in-out infinite;
         padding: 0 var(--spacing-md);
     }
+
+@keyframes slide-hint {
+    0%, 100% {
+        transform: translateX(0);
+    }
+    50% {
+        transform: translateX(5px);
+    }
+}
 
     /* 6. Process: 내부 가로 스크롤 */
     .step-scroll-container {
@@ -701,7 +810,17 @@
         background: var(--color-text);
         width: 24px;
         border-radius: 12px;
+        animation: dot-pulse 2s ease-in-out infinite;
     }
+
+@keyframes dot-pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(20, 31, 64, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 0 8px rgba(20, 31, 64, 0);
+    }
+}
 }
 
 @keyframes blink {
