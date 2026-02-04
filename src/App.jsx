@@ -1,5 +1,7 @@
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { AppProvider, useAppState } from './context/AppStateContext'
+import { Ssgoi } from "@ssgoi/react";
+import { fade, scroll, drill } from "@ssgoi/react/view-transitions";
 import LandingPage from './pages/Landing'
 import AuthPage from './pages/Auth'
 import InterviewPage from './pages/Interview'
@@ -10,6 +12,7 @@ import PurchaseComplete from './pages/rewards/PurchaseComplete'
 import PurchaseHistory from './pages/rewards/PurchaseHistory'
 import AppLayout from './layouts/AppLayout'
 import './index.css'
+
 
 function ProtectedRoute({ children }) {
   const { user, isLoggingOut } = useAppState()
@@ -76,8 +79,48 @@ export default function App() {
   return (
     <AppProvider>
       <BrowserRouter>
-        <AppRoutes />
+        <Ssgoi
+          config={{
+            defaultTransition: fade(),
+            transitions: [
+              {
+                from: '/',
+                to: '/auth',
+                transition: scroll(),
+              },
+              {
+                from: '/auth',
+                to: '/',
+                transition: scroll(),
+              },
+              {
+                from: '/mypage',
+                to: '/reward',
+                transition: scroll(),
+              },
+              {
+                from: '/reward',
+                to: '/mypage',
+                transition: scroll(),
+              },
+              {
+                from: '/reward',
+                to: '/reward/complete',
+                transition: drill(),
+              },
+              {
+                from: '/reward',
+                to: '/reward/history',
+                transition: fade(),
+              },
+            ],
+          }}
+        >
+          <AppRoutes />
+        </Ssgoi>
       </BrowserRouter>
     </AppProvider>
-  )
+  );
 }
+
+

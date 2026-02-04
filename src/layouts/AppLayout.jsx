@@ -1,5 +1,4 @@
 import {useEffect, useState} from 'react'
-import {motion as Motion} from 'framer-motion'
 import {Link, NavLink, Outlet, useLocation, useNavigate} from 'react-router-dom'
 import {useAppState} from '../context/AppStateContext'
 import logo from '../assets/logo.png'
@@ -126,15 +125,9 @@ export default function AppLayout() {
       )}
 
       <main className="main">
-        <Motion.div
-          key={location.pathname}
-          initial={{opacity: 0}}
-          animate={{opacity: 1}}
-          transition={{duration: 0.25, ease: 'easeOut'}}
-          className="main__content"
-        >
+        <div className="main__content">
           <Outlet/>
-        </Motion.div>
+        </div>
       </main>
 
       <footer className="footer">
