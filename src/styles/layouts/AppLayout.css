@@ -201,7 +201,8 @@
 }
 
 .main__content {
-  /* content flows naturally */
+  position: relative;
+  min-height: 100vh;
 }
 
 /* Footer */
