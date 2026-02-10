@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { motion as Motion, AnimatePresence } from 'framer-motion'
+import { motion as Motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motion'
 import { useAppState } from '../context/AppStateContext'
 import useMediaQuery from '../hooks/useMediaQuery'
 import Dropdown from '../components/Dropdown'
@@ -36,12 +36,16 @@ export default function AuthPage() {
   const [activeStep, setActiveStep] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
-  const [isLightOn, setIsLightOn] = useState(() => window.matchMedia('(max-width: 768px)').matches) // 모바일은 처음부터 켜짐
-  const [isPulling, setIsPulling] = useState(false) // 줄 당기는 중
-  const [isReleased, setIsReleased] = useState(false) // 끈 놓은 후 찰랑거림
   const [showForgotPassword, setShowForgotPassword] = useState(false)
   const [forgotEmail, setForgotEmail] = useState('')
   const [forgotEmailSent, setForgotEmailSent] = useState(false)
+
+  // 카카오 인증 관련 상태
+  const [authMethod, setAuthMethod] = useState(null) // null | 'kakao' | 'email'
+  const [isKakaoAuthenticating, setIsKakaoAuthenticating] = useState(false)
+  const [showKakaoNotificationModal, setShowKakaoNotificationModal] = useState(false)
+  const [kakaoAuthData, setKakaoAuthData] = useState(null) // { name, email }
+  const [showEmailLogin, setShowEmailLogin] = useState(false) // 이메일 로그인 폼 표시 여부
 
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [signupForm, setSignupForm] = useState({
@@ -78,7 +82,10 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
   const passwordValid = signupForm.password.length >= 6
   const passwordSpecialValid = /[^A-Za-z0-9]/.test(signupForm.password)
   const passwordMatch = signupForm.password === signupForm.passwordConfirm
-  const step1Valid = signupForm.name && signupForm.email && passwordValid && passwordSpecialValid && passwordMatch
+  // 카카오 인증 시 비밀번호는 선택사항으로 처리
+  const step1Valid = authMethod === 'kakao' 
+    ? signupForm.name && signupForm.email 
+    : signupForm.name && signupForm.email && passwordValid && passwordSpecialValid && passwordMatch
   const step2Valid = signupForm.jobRole.trim().length > 0
   const step3Valid = signupForm.cadence !== null
 
@@ -199,41 +206,95 @@ const handleResetPassword = async () => {
     setActiveStep((prev) => Math.max(prev - 1, 0))
   }
 
+  // 카카오 인증 처리
+  const handleKakaoAuth = async () => {
+    setIsKakaoAuthenticating(true)
+    setError('')
 
-  const handlePullStart = (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (isPulling) return
-    setIsPulling(true)
-    setIsReleased(false)
+    try {
+      // 모의 카카오 인증 처리 (실제로는 Kakao SDK 사용)
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      
+      // 모의 카카오 사용자 정보
+      const mockKakaoData = {
+        name: '홍길동', // 실제로는 카카오 API에서 받아옴
+        email: 'kakao@example.com', // 실제로는 카카오 API에서 받아옴
+      }
+      
+      setKakaoAuthData(mockKakaoData)
+      setIsKakaoAuthenticating(false)
+      setShowKakaoNotificationModal(true)
+    } catch (err) {
+      setError('카카오 인증에 실패했습니다.')
+      setIsKakaoAuthenticating(false)
+    }
   }
 
-  const handlePullEnd = (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (!isPulling) return
-    setIsPulling(false)
-    setIsReleased(true)
-    setIsLightOn((prev) => !prev)
-    // 찰랑거림이 끝난 후 상태 초기화
-    setTimeout(() => {
-      setIsReleased(false)
-    }, 800)
+  // 카카오 알림 설정 확인
+  const handleKakaoNotificationConfirm = (enableNotification) => {
+    if (!kakaoAuthData) return
+
+    // 정보 자동 입력
+    setSignupForm((prev) => ({
+      ...prev,
+      name: kakaoAuthData.name,
+      email: kakaoAuthData.email,
+      password: 'kakao-auth-' + Date.now(), // 임시 비밀번호 (실제로는 서버에서 처리)
+      passwordConfirm: 'kakao-auth-' + Date.now(),
+      notificationKakao: enableNotification,
+    }))
+
+    // 로그인 폼에도 정보 저장 (나중에 로그인 시 사용)
+    localStorage.setItem('kakaoAuthEmail', kakaoAuthData.email)
+
+    setAuthMethod('kakao')
+    setShowKakaoNotificationModal(false)
+    setActiveStep(0) // Step 1로 이동 (기본 정보는 이미 채워짐)
+  }
+
+  // 로그인용 카카오 인증
+  const handleKakaoLogin = async () => {
+    setIsKakaoAuthenticating(true)
+    setError('')
+
+    try {
+      // 모의 카카오 인증 처리
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      
+      // 저장된 카카오 이메일이 있으면 사용, 없으면 모의 데이터
+      const savedEmail = localStorage.getItem('kakaoAuthEmail')
+      const mockKakaoData = {
+        email: savedEmail || 'kakao@example.com',
+      }
+      
+      // 로그인 폼에 자동 입력
+      setLoginForm({
+        email: mockKakaoData.email,
+        password: '', // 카카오 로그인은 비밀번호 불필요 (실제로는 서버에서 처리)
+      })
+
+      // 카카오 로그인은 바로 로그인 처리 (실제로는 서버 API 호출)
+      setIsKakaoAuthenticating(false)
+      
+      // 모의 로그인 처리
+      setIsLoading(true)
+      await login({ email: mockKakaoData.email, password: 'kakao-login' })
+      navigate(redirectFrom || '/mypage', { replace: true })
+    } catch (err) {
+      setError('카카오 로그인에 실패했습니다.')
+      setIsKakaoAuthenticating(false)
+      setIsLoading(false)
+    }
+  }
+
+  // 이메일 인증 선택
+  const handleEmailAuth = () => {
+    setAuthMethod('email')
+    setActiveStep(0)
   }
 
   return (
-    <div className={`auth ${!isLightOn ? 'auth--dark' : ''}`}>
-      {/* 어두운 오버레이 */}
-      <AnimatePresence>
-        {!isLightOn && (
-          <Motion.div
-            className="auth__dark-overlay"
-            initial={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.6 }}
-          />
-        )}
-      </AnimatePresence>
+    <div className="auth">
 
       {/* Loading Overlay */}
       <AnimatePresence>
@@ -252,89 +313,37 @@ const handleResetPassword = async () => {
       </AnimatePresence>
 
       <div className="auth__container">
-        {/* Mascot Section with Mood Lamp */}
+        {/* Mascot Section */}
         <div className={`auth__mascot-section auth__mascot-section--${mode}`}>
-          {/* 스탠드 조명 */}
-          <div className={`auth__lamp ${isLightOn ? 'auth__lamp--on' : ''}`}>
-            {/* 갓 */}
-            <div className="auth__lamp-shade">
-              <div className="auth__lamp-shade-inner" />
-            </div>
-            {/* 기둥 */}
-            <div className="auth__lamp-pole" />
-            {/* 받침대 */}
-            <div className="auth__lamp-base" />
-            {/* 빛 효과 */}
-            {isLightOn && <div className="auth__lamp-light" />}
-            {/* 당기는 줄 */}
-            <Motion.div
-              className={`auth__lamp-pull ${isPulling ? 'auth__lamp-pull--pulling' : ''}`}
-              onMouseDown={handlePullStart}
-              onMouseUp={handlePullEnd}
-              onMouseLeave={isPulling ? handlePullEnd : undefined}
-              onTouchStart={handlePullStart}
-              onTouchEnd={handlePullEnd}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  handlePullStart(e)
-                  setTimeout(() => handlePullEnd(e), 200)
-                }
-              }}
-              style={{ cursor: 'grab' }}
-              whileTap={{ cursor: 'grabbing' }}
-            >
-              <Motion.div
-                className="auth__lamp-string"
-                animate={{
-                  height: isPulling ? 95 : 65,
-                  rotate: isReleased ? [0, 8, -6, 4, -3, 2, -1, 0] : (isPulling ? 0 : undefined),
-                }}
-                transition={
-                  isReleased
-                    ? { rotate: { duration: 0.8, ease: 'easeOut' } }
-                    : { height: { type: 'spring', stiffness: 400, damping: 25 } }
-                }
-              />
-            </Motion.div>
-          </div>
-
-          {/* 힌트 텍스트 */}
-          <AnimatePresence>
-            {!isLightOn && (
-              <Motion.p
-                className="auth__lamp-hint"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ delay: 0.5 }}
-              >
-                줄을 당겨 불을 켜세요
-              </Motion.p>
-            )}
-          </AnimatePresence>
-
-          {/* 로고 텍스트 (불 켜진 후) */}
-          <AnimatePresence>
-            {isLightOn && (
-              <Motion.div
-                className="auth__mascot-text"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-              >
-                <h1>PrePair</h1>
-                <p>AI와 함께하는 면접 준비</p>
-              </Motion.div>
-            )}
-          </AnimatePresence>
+          {/* 로고 텍스트 */}
+          <Motion.div
+            className="auth__mascot-text"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <img src={logo} alt="PrePair" className="auth__mascot-logo" />
+            <h1>PrePair</h1>
+            <p className="auth__mascot-tagline">AI와 함께하는 면접 준비</p>
+          </Motion.div>
         </div>
 
         {/* Form Section */}
         <div className="auth__form-section">
           <div className="auth__form-card">
           <header className="auth__header">
+            {mode === 'login' && showEmailLogin && (
+              <button
+                type="button"
+                className="auth__back-icon"
+                onClick={() => {
+                  setShowEmailLogin(false)
+                  setLoginForm({ email: '', password: '' })
+                }}
+              >
+                ←
+              </button>
+            )}
             <h2>{mode === 'signup' ? '회원가입' : '로그인'}</h2>
           </header>
 
@@ -346,6 +355,60 @@ const handleResetPassword = async () => {
 
           {mode === 'signup' ? (
             <form onSubmit={handleSignup}>
+              {/* 인증 방식 선택 화면 */}
+              {authMethod === null && (
+                <Motion.div
+                  key="auth-method-select"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="auth__method-select"
+                >
+                  <div className="auth__method-select-content">
+                    <h3 className="auth__method-select-title">회원가입 방법을 선택해주세요</h3>
+                    <p className="auth__method-select-subtitle">간편하게 시작하거나 이메일로 가입할 수 있습니다</p>
+                    
+                    <button
+                      type="button"
+                      className="btn btn--kakao btn--block auth__method-btn"
+                      onClick={handleKakaoAuth}
+                      disabled={isKakaoAuthenticating}
+                    >
+                      {isKakaoAuthenticating ? (
+                        <>
+                          <div className="spinner spinner--sm" />
+                          <span>인증 중...</span>
+                        </>
+                      ) : (
+                        <>
+                          <img 
+                            src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" 
+                            alt="카카오톡" 
+                            className="auth__kakao-icon"
+                          />
+                          <span>카카오톡으로 시작하기</span>
+                        </>
+                      )}
+                    </button>
+
+                    <div className="auth__method-divider">
+                      <span>또는</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--block auth__method-btn"
+                      onClick={handleEmailAuth}
+                    >
+                      이메일로 가입하기
+                    </button>
+                  </div>
+                </Motion.div>
+              )}
+
+              {/* 기존 회원가입 폼 (인증 방식 선택 후 표시) */}
+              {authMethod !== null && (
+                <>
               {/* Stepper */}
               <div className="auth__stepper">
                 {steps.map((step, idx) => {
@@ -374,6 +437,17 @@ const handleResetPassword = async () => {
                   exit={{ opacity: 0, x: -20 }}
                   className="auth__step-content"
                 >
+                  {authMethod === 'kakao' && (
+                    <div className="auth__kakao-badge">
+                      <img 
+                        src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" 
+                        alt="카카오톡" 
+                        className="auth__kakao-icon-small"
+                      />
+                      <span>카카오톡으로 가입 중</span>
+                    </div>
+                  )}
+
                   <div className="form-group">
                     <label className="form-label">이름</label>
                     <input
@@ -383,51 +457,59 @@ const handleResetPassword = async () => {
                       value={signupForm.name}
                       onChange={(e) => setSignupForm((p) => ({ ...p, name: e.target.value }))}
                       required
+                      disabled={authMethod === 'kakao'}
                     />
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">이메일 (또는 아이디)</label>
+                    <label className="form-label">이메일</label>
                     <input
                       type="text"
                       className="form-input"
                       placeholder="test 또는 test@example.com"
                       value={signupForm.email}
                       onChange={(e) => setSignupForm((p) => ({ ...p, email: e.target.value }))}
+                      disabled={authMethod === 'kakao'}
                     />
-                    <p className="form-helper">테스트용: 아무 값이나 입력 가능</p>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">비밀번호</label>
-                    <input
-                      type="password"
-                      className="form-input"
-                      placeholder="6자 이상, 특수문자 포함"
-                      value={signupForm.password}
-                      onChange={(e) => setSignupForm((p) => ({ ...p, password: e.target.value }))}
-                      required
-                    />
-                    <div className="auth__password-hints">
-                      <span className={passwordValid ? 'valid' : ''}>• 6자 이상</span>
-                      <span className={passwordSpecialValid ? 'valid' : ''}>• 특수문자 포함</span>
-                    </div>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">비밀번호 확인</label>
-                    <input
-                      type="password"
-                      className={`form-input ${signupForm.passwordConfirm && !passwordMatch ? 'form-input--error' : ''}`}
-                      placeholder="비밀번호 확인"
-                      value={signupForm.passwordConfirm}
-                      onChange={(e) => setSignupForm((p) => ({ ...p, passwordConfirm: e.target.value }))}
-                      required
-                    />
-                    {signupForm.passwordConfirm && !passwordMatch && (
-                      <p className="form-error">비밀번호가 일치하지 않습니다.</p>
+                    {authMethod === 'email' && (
+                      <p className="form-helper">테스트용: 아무 값이나 입력 가능</p>
                     )}
                   </div>
+
+                  {authMethod === 'email' && (
+                    <>
+                      <div className="form-group">
+                        <label className="form-label">비밀번호</label>
+                        <input
+                          type="password"
+                          className="form-input"
+                          placeholder="6자 이상, 특수문자 포함"
+                          value={signupForm.password}
+                          onChange={(e) => setSignupForm((p) => ({ ...p, password: e.target.value }))}
+                          required
+                        />
+                        <div className="auth__password-hints">
+                          <span className={passwordValid ? 'valid' : ''}>• 6자 이상</span>
+                          <span className={passwordSpecialValid ? 'valid' : ''}>• 특수문자 포함</span>
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">비밀번호 확인</label>
+                        <input
+                          type="password"
+                          className={`form-input ${signupForm.passwordConfirm && !passwordMatch ? 'form-input--error' : ''}`}
+                          placeholder="비밀번호 확인"
+                          value={signupForm.passwordConfirm}
+                          onChange={(e) => setSignupForm((p) => ({ ...p, passwordConfirm: e.target.value }))}
+                          required
+                        />
+                        {signupForm.passwordConfirm && !passwordMatch && (
+                          <p className="form-error">비밀번호가 일치하지 않습니다.</p>
+                        )}
+                      </div>
+                    </>
+                  )}
 
                   <button
                     type="button"
@@ -523,19 +605,27 @@ const handleResetPassword = async () => {
                     <div className="auth__notification-info">
                       <span>📧</span> 이메일 알림은 기본 제공됩니다.
                     </div>
-                    <div className="auth__notification-info">
-                      <img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" alt="카카오톡" style={{ width: '20px', height: '20px' }} />
-                      <span>카카오톡 알림 (선택)</span>
-                      <input
-                        type="checkbox"
-                        className="form-check-input"
-                        checked={signupForm.notificationKakao}
-                        onChange={(e) =>
-                          setSignupForm((p) => ({ ...p, notificationKakao: e.target.checked }))
-                        }
-                        style={{ marginLeft: 'auto' }}
-                      />
-                    </div>
+                    {authMethod === 'kakao' && (
+                      <div className={`auth__notification-info ${signupForm.notificationKakao ? 'auth__notification-info--active' : ''}`}>
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" alt="카카오톡" style={{ width: '20px', height: '20px' }} />
+                        <span>카카오톡 알림 {signupForm.notificationKakao ? '(활성화됨)' : '(비활성화됨)'}</span>
+                      </div>
+                    )}
+                    {authMethod === 'email' && (
+                      <div className="auth__notification-info">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" alt="카카오톡" style={{ width: '20px', height: '20px' }} />
+                        <span>카카오톡 알림 (선택)</span>
+                        <input
+                          type="checkbox"
+                          className="form-check-input"
+                          checked={signupForm.notificationKakao}
+                          onChange={(e) =>
+                            setSignupForm((p) => ({ ...p, notificationKakao: e.target.checked }))
+                          }
+                          style={{ marginLeft: 'auto' }}
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="auth__summary card card--gradient card--sm">
@@ -559,65 +649,119 @@ const handleResetPassword = async () => {
 
               <p className="auth__switch">
                 이미 계정이 있으신가요?{' '}
-                <button type="button" className="auth__switch-link" onClick={() => setMode('login')}>
+                <button type="button" className="auth__switch-link" onClick={() => {
+                  setMode('login')
+                  setAuthMethod(null)
+                  setActiveStep(0)
+                }}>
                   로그인
                 </button>
               </p>
+                </>
+              )}
             </form>
           ) : (
             <form onSubmit={handleLogin}>
-              <div className="form-group">
-                <label className="form-label">이메일 (또는 아이디)</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="test, admin, demo 또는 아무 값"
-                  value={loginForm.email}
-                  onChange={(e) => setLoginForm((p) => ({ ...p, email: e.target.value }))}
-                />
-                <p className="form-helper">테스트 계정: test/test, admin/admin, demo/demo</p>
-              </div>
+              {!showEmailLogin && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn--kakao btn--block auth__kakao-login-btn"
+                    onClick={handleKakaoLogin}
+                    disabled={isKakaoAuthenticating || isLoading}
+                  >
+                    {isKakaoAuthenticating ? (
+                      <>
+                        <div className="spinner spinner--sm" />
+                        <span>인증 중...</span>
+                      </>
+                    ) : (
+                      <>
+                        <img 
+                          src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" 
+                          alt="카카오톡" 
+                          className="auth__kakao-icon"
+                        />
+                        <span>카카오톡으로 로그인</span>
+                      </>
+                    )}
+                  </button>
 
-              <div className="form-group">
-                <label className="form-label">비밀번호</label>
-                <input
-                  type="password"
-                  className="form-input"
-                  placeholder="비밀번호 (아무 값이나 가능)"
-                  value={loginForm.password}
-                  onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
-                />
-              </div>
+                  <div className="auth__method-divider">
+                    <span>또는</span>
+                  </div>
 
-              <p className="auth__forgot-password">
-  <button 
-    type="button" 
-    className="auth__forgot-link" 
-    onClick={() => setShowFindId(true)}
-  >
-    아이디 찾기
-  </button>
-  {' | '}
-  <button 
-    type="button" 
-    className="auth__forgot-link" 
-    onClick={() => setShowForgotPassword(true)}
-  >
-    비밀번호를 잊으셨나요?
-  </button>
-</p>
+                  <button
+                    type="button"
+                    className="btn btn--secondary btn--block auth__email-login-btn"
+                    onClick={() => setShowEmailLogin(true)}
+                  >
+                    이메일로 로그인
+                  </button>
+                </>
+              )}
 
-              <button
-                type="submit"
-                className="btn btn--primary btn--block auth__submit-btn"
-                disabled={isLoading}
-              >
-                {isLoading ? '로그인 중...' : '로그인'}
-              </button>
+              {showEmailLogin && (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">이메일</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="test, admin, demo 또는 아무 값"
+                      value={loginForm.email}
+                      onChange={(e) => setLoginForm((p) => ({ ...p, email: e.target.value }))}
+                      autoFocus
+                    />
+                    <p className="form-helper">테스트 계정: test/test, admin/admin, demo/demo</p>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">비밀번호</label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      placeholder="비밀번호 (아무 값이나 가능)"
+                      value={loginForm.password}
+                      onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="btn btn--primary btn--block auth__submit-btn"
+                    disabled={isLoading || isKakaoAuthenticating}
+                  >
+                    {isLoading ? '로그인 중...' : '로그인'}
+                  </button>
+
+                  <p className="auth__forgot-password">
+                    <button
+                      type="button"
+                      className="auth__forgot-link"
+                      onClick={() => setShowFindId(true)}
+                    >
+                      아이디 찾기
+                    </button>
+                    {' | '}
+                    <button
+                      type="button"
+                      className="auth__forgot-link"
+                      onClick={() => setShowForgotPassword(true)}
+                    >
+                      비밀번호 찾기
+                    </button>
+                  </p>
+                </>
+              )}
 
               <p className="auth__switch">
                 계정이 없으신가요?{' '}
-                <button type="button" className="auth__switch-link" onClick={() => setMode('signup')}>
+                <button type="button" className="auth__switch-link" onClick={() => {
+                  setMode('signup')
+                  setAuthMethod(null)
+                  setShowEmailLogin(false)
+                }}>
                   회원가입
                 </button>
               </p>
@@ -891,6 +1035,56 @@ const handleResetPassword = async () => {
     </Motion.div>
   )}
 </AnimatePresence>
+
+      {/* 카카오 알림 설정 모달 */}
+      <AnimatePresence>
+        {showKakaoNotificationModal && (
+          <Motion.div
+            className="auth__modal-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => {
+              // 모달 외부 클릭 시 닫지 않음 (명시적 선택 필요)
+            }}
+          >
+            <Motion.div
+              className="auth__modal"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="auth__kakao-modal-header">
+                <img 
+                  src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" 
+                  alt="카카오톡" 
+                  className="auth__kakao-icon-large"
+                />
+                <h3>카카오톡 알림을 받으시겠어요?</h3>
+                <p>면접 질문과 피드백을 카카오톡으로도 받아보실 수 있습니다.</p>
+              </div>
+
+              <div className="auth__kakao-modal-buttons">
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  onClick={() => handleKakaoNotificationConfirm(false)}
+                >
+                  나중에 하기
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--kakao"
+                  onClick={() => handleKakaoNotificationConfirm(true)}
+                >
+                  알림 받기
+                </button>
+              </div>
+            </Motion.div>
+          </Motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
