@@ -225,10 +225,29 @@
   transform: translate(-50%, -60%);
 }
 
+/* 브랜드 영역: 세로 중앙 정렬로 로그인 카드와 시선 균형 */
 .auth__mascot-text {
-  position: absolute;
-  bottom: 20px;
+  position: relative;
+  z-index: 5;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 문구 위 로고 */
+.auth__mascot-logo {
+  width: 312px;
+  height: auto;
+  margin-bottom: var(--spacing-md);
+  display: block;
+  animation: auth-logo-float 3s ease-in-out infinite;
+}
+
+@keyframes auth-logo-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
 }
 
 .auth__lamp-hint {
@@ -243,7 +262,7 @@
   margin-bottom: var(--spacing-xs);
 }
 
-.auth__mascot-text p {
+.auth__mascot-tagline {
   font-size: var(--font-size-base);
   color: var(--color-dark-500);
 }
@@ -264,15 +283,51 @@
   border-radius: var(--radius-lg);
 }
 
+/* 로그인/회원가입 폼 내 요소 간격 통일 (단위: var(--spacing-md)) */
+.auth__form-card .form-group {
+  gap: var(--spacing-sm);
+  margin-top: 0;
+  margin-bottom: var(--spacing-md);
+}
+.auth__form-card .form-group + .form-group {
+  margin-top: 0;
+}
+.auth__form-card .form-helper {
+  margin-top: 0;
+}
+
 .auth__header {
   text-align: center;
-  margin-bottom: var(--spacing-xl);
+  margin-bottom: var(--spacing-md);
+  position: relative;
 }
 
 .auth__header h2 {
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-bold);
   color: var(--color-dark-800);
+}
+
+.auth__back-icon {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--color-dark-500);
+  font-size: var(--font-size-lg);
+  cursor: pointer;
+  padding: var(--spacing-xs);
+  transition: color var(--transition-fast);
+}
+
+.auth__back-icon:hover {
+  color: var(--color-dark-800);
+}
+
+.auth__back-icon:active {
+  transform: translateY(-50%) translateX(-2px);
 }
 
 /* Error */
@@ -440,14 +495,14 @@
   padding: 0.625rem 1.25rem;
 }
 
-/* Submit Button */
+/* Submit Button (위 간격은 .form-group margin-bottom으로 통일) */
 .auth__submit-btn {
-  margin-top: var(--spacing-sm);
+  margin-top: 0;
 }
 
-/* Forgot Password */
+/* 아이디 찾기 | 비밀번호 찾기 */
 .auth__forgot-password {
-  text-align: left;
+  text-align: center;
   margin-top: var(--spacing-md);
   margin-bottom: 0;
 }
@@ -529,7 +584,7 @@
 /* Switch Mode */
 .auth__switch {
   text-align: center;
-  margin-top: var(--spacing-xl);
+  margin-top: var(--spacing-md);
   font-size: var(--font-size-sm);
   color: var(--color-dark-500);
 }
@@ -601,4 +656,165 @@
   color: var(--color-dark-600);
   margin-bottom: var(--spacing-lg);
   line-height: var(--line-height-relaxed);
+}
+
+/* 인증 방식 선택 화면 */
+.auth__method-select {
+  padding: var(--spacing-lg) 0;
+}
+
+.auth__method-select-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.auth__method-select-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-dark-800);
+  text-align: center;
+  margin: 0;
+}
+
+.auth__method-select-subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-500);
+  text-align: center;
+  margin: 0;
+}
+
+.auth__method-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md) var(--spacing-lg);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+}
+
+.auth__method-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: var(--spacing-sm) 0;
+}
+
+.auth__method-divider::before,
+.auth__method-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--color-dark-200);
+}
+
+.auth__method-divider span {
+  padding: 0 var(--spacing-md);
+  color: var(--color-dark-400);
+  font-size: var(--font-size-sm);
+}
+
+/* 카카오 버튼 스타일 */
+.btn--kakao {
+  background: #FEE500;
+  color: #000000;
+  border: none;
+  transition: all var(--transition-fast);
+}
+
+.btn--kakao:hover:not(:disabled) {
+  background: #FDD835;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(253, 232, 53, 0.3);
+}
+
+.btn--kakao:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn--kakao:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.auth__kakao-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.auth__kakao-icon-small {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.auth__kakao-icon-large {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto var(--spacing-md);
+}
+
+/* 카카오 배지 */
+.auth__kakao-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: #FEE500;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-md);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: #000000;
+}
+
+/* 카카오 알림 모달 */
+.auth__kakao-modal-header {
+  text-align: center;
+  margin-bottom: var(--spacing-xl);
+}
+
+.auth__kakao-modal-header h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-dark-800);
+  margin: var(--spacing-md) 0 var(--spacing-sm);
+}
+
+.auth__kakao-modal-header p {
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-500);
+  margin: 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.auth__kakao-modal-buttons {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.auth__kakao-modal-buttons .btn {
+  flex: 1;
+}
+
+/* 알림 정보 활성화 상태 */
+.auth__notification-info--active {
+  background: #FEE500;
+  color: #000000;
+}
+
+.auth__notification-info--active img {
+  filter: brightness(0);
+}
+
+/* 로그인 카카오 버튼 */
+.auth__kakao-login-btn {
+  margin-bottom: var(--spacing-md);
+}
+
+/* 이메일 로그인 버튼 */
+.auth__email-login-btn {
+  margin-bottom: var(--spacing-md);
 }
