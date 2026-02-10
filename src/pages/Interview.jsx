@@ -852,7 +852,7 @@ export default function CoachPage() {
         <header className="coach__header">
           <div>
             <h1>AI 면접 코칭</h1>
-            <p>오늘의 질문에 답변하고 AI 피드백을 받아보세요</p>
+            
           </div>
           <div className="coach__tabs">
             <button
@@ -861,19 +861,6 @@ export default function CoachPage() {
             >
               오늘의 면접
             </button>
-            <button
-              className={`coach__tab ${activeTab === 'history' ? 'coach__tab--active' : ''}`}
-              onClick={() => setActiveTab('history')}
-            >
-              면접 기록
-            </button>
-            <ProTab
-              isActive={activeTab === 'mock'}
-              onClick={() => handleProTabClick('mock', 'mock')}
-              feature="mock"
-            >
-              모의 면접
-            </ProTab>
             <ProTab
               isActive={activeTab === 'jobpost'}
               onClick={() => handleProTabClick('jobpost', 'jobpost')}
@@ -881,6 +868,19 @@ export default function CoachPage() {
             >
               공고 분석
             </ProTab>
+            <ProTab
+              isActive={activeTab === 'mock'}
+              onClick={() => handleProTabClick('mock', 'mock')}
+              feature="mock"
+            >
+              모의 면접
+            </ProTab>
+            <button
+              className={`coach__tab ${activeTab === 'history' ? 'coach__tab--active' : ''}`}
+              onClick={() => setActiveTab('history')}
+            >
+              면접 기록
+            </button>
           </div>
         </header>
 
