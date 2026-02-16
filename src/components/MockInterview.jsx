@@ -43,13 +43,14 @@ export default function MockInterview() {
   const [audioLevel, setAudioLevel] = useState(0)
   const [isQuestionVisible, setIsQuestionVisible] = useState(false)
 
-  // ElevenLabs TTS
-  const [selectedSpeaker, setSelectedSpeaker] = useState('changu2')
+  // Qwen3 TTS
+  const [selectedSpeaker, setSelectedSpeaker] = useState('sohee')
   const { stop: stopTTS, isPlaying: isTTSPlaying, isLoading: isTTSLoading, speakers } = useTTS()
 
   // 프리로딩된 오디오
   const [isPreloading, setIsPreloading] = useState(false)
   const [preloadProgress, setPreloadProgress] = useState(0)
+  const [preloadError, setPreloadError] = useState(null)
   const preloadedAudiosRef = useRef({})
 
   const videoRef = useRef(null)
@@ -168,7 +169,6 @@ export default function MockInterview() {
 
   // 질문 음성 프리로딩
   const preloadQuestionAudios = useCallback(async (questions) => {
-    // 기존 AbortController가 있으면 취소
     if (preloadAbortControllerRef.current) {
       preloadAbortControllerRef.current.abort()
     }
@@ -178,32 +178,37 @@ export default function MockInterview() {
 
     setIsPreloading(true)
     setPreloadProgress(0)
+    setPreloadError(null)
     const audios = {}
 
-    const options = {
-      speaker: selectedSpeaker,
-      stability: 0.5,
-      similarityBoost: 0.75,
-      style: 0,
-    }
+    const options = { speaker: selectedSpeaker }
 
     try {
       for (let i = 0; i < questions.length; i++) {
-        // 취소되었는지 확인
         if (abortController.signal.aborted) {
           throw new DOMException('Preload cancelled', 'AbortError')
         }
 
         try {
+          // Rate limit 회피: 요청 간 1초 대기 (Qwen3 TTS 제한)
+          if (i > 0) {
+            await new Promise((r) => setTimeout(r, 1000))
+          }
           const blob = await textToSpeech(questions[i].text, options, abortController.signal)
           const url = URL.createObjectURL(blob)
           audios[questions[i].id] = url
           setPreloadProgress(Math.round(((i + 1) / questions.length) * 100))
         } catch (error) {
           if (error.name === 'AbortError') {
-            throw error // 취소된 경우 상위로 전파
+            throw error
           }
           console.error(`질문 ${i + 1} 프리로딩 실패:`, error)
+          const msg = error.message || '음성 로딩에 실패했습니다.'
+          setPreloadError(
+            msg.includes('rate limit') || msg.includes('RateQuota')
+              ? '요청 한도 초과. 잠시 후 다시 시도해주세요.'
+              : msg
+          )
         }
       }
 
@@ -213,9 +218,9 @@ export default function MockInterview() {
       return audios
     } catch (error) {
       if (error.name === 'AbortError') {
-        // 취소된 경우 - 이미 생성된 URL 정리
         Object.values(audios).forEach((url) => URL.revokeObjectURL(url))
         setIsPreloading(false)
+        setPreloadError(null)
         preloadAbortControllerRef.current = null
         return null
       }
@@ -248,46 +253,56 @@ export default function MockInterview() {
     audioElementRef.current.play().catch(() => {})
   }, [])
 
-  // 프리로딩된 오디오로 질문 읽기
-  const speakQuestion = useCallback(async (questionId) => {
-    const audioUrl = preloadedAudiosRef.current[questionId]
+  // 질문 음성 재생 (프리로딩 또는 온디맨드 TTS)
+  const speakQuestion = useCallback(
+    async (question) => {
+      const questionId = question?.id
+      const questionText = question?.text
+      if (!questionId || !questionText) return
 
-    if (!audioUrl) {
-      console.error('프리로딩된 오디오가 없습니다:', questionId)
-      setIsQuestionVisible(true)
-      startCountdown()
-      return
-    }
-
-    try {
       setIsSpeaking(true)
-      setIsQuestionVisible(true) // TTS 재생 시작과 동시에 질문 표시
+      setIsQuestionVisible(true)
 
-      // 기존 오디오 요소 재사용 (모바일 호환성)
-      const audio = audioElementRef.current || new Audio()
-      audio.src = audioUrl
+      const playAudio = async (urlOrBlob) => {
+        const url = urlOrBlob instanceof Blob ? URL.createObjectURL(urlOrBlob) : urlOrBlob
+        const audio = audioElementRef.current || new Audio()
+        audio.playsInline = true
+        audio.src = url
 
-      await new Promise((resolve, reject) => {
-        audio.onended = () => {
-          resolve()
+        await new Promise((resolve, reject) => {
+          audio.onended = () => {
+            if (urlOrBlob instanceof Blob) URL.revokeObjectURL(url)
+            resolve()
+          }
+          audio.onerror = () => {
+            if (urlOrBlob instanceof Blob) URL.revokeObjectURL(url)
+            reject(new Error('오디오 재생 실패'))
+          }
+          audio.play().catch(reject)
+        })
+      }
+
+      try {
+        const audioUrl = preloadedAudiosRef.current[questionId]
+
+        if (audioUrl) {
+          await playAudio(audioUrl)
+        } else {
+          // 프리로딩 실패 시 온디맨드 TTS 폴백
+          const blob = await textToSpeech(questionText, { speaker: selectedSpeaker })
+          await playAudio(blob)
         }
-        audio.onerror = () => {
-          reject(new Error('오디오 재생 실패'))
-        }
-        audio.play().catch(reject)
-      })
-
-      // 질문 읽기 완료 후 카운트다운 시작
-      setTimeout(() => {
-        setIsSpeaking(false)
-        startCountdown()
-      }, 300)
-    } catch (error) {
-      console.error('TTS 오류:', error)
-      setIsSpeaking(false)
-      startCountdown()
-    }
-  }, [startCountdown])
+      } catch (error) {
+        console.error('질문 음성 재생 오류:', error)
+      } finally {
+        setTimeout(() => {
+          setIsSpeaking(false)
+          startCountdown()
+        }, 300)
+      }
+    },
+    [startCountdown, selectedSpeaker]
+  )
 
   // 녹화 시간 타이머
   useEffect(() => {
@@ -352,9 +367,9 @@ export default function MockInterview() {
       }
     }, 500)
 
-    // 첫 질문 읽기 (프리로딩된 오디오 사용)
+    // 첫 질문 읽기
     setTimeout(() => {
-      speakQuestion(questions[0].id)
+      speakQuestion(questions[0])
     }, 1500)
   }
 
@@ -385,7 +400,7 @@ export default function MockInterview() {
       const nextIndex = currentQuestionIndex + 1
       setCurrentQuestionIndex(nextIndex)
       setTimeout(() => {
-        speakQuestion(selectedQuestions[nextIndex].id)
+        speakQuestion(selectedQuestions[nextIndex])
       }, 500)
     } else {
       // 모든 질문 완료 - 피드백 단계로
@@ -436,13 +451,13 @@ export default function MockInterview() {
 
   // 다시 시작
   const handleRestart = () => {
-    // 프리로딩된 오디오 URL 정리
     Object.values(preloadedAudiosRef.current).forEach((url) => {
       URL.revokeObjectURL(url)
     })
     preloadedAudiosRef.current = {}
 
     setPhase('ready')
+    setPreloadError(null)
     setCurrentQuestionIndex(0)
     setAnswers([])
     setBehaviorAnalysis(null)
@@ -585,7 +600,7 @@ export default function MockInterview() {
                 <span className="mock-interview__count-hint">최대 {MAX_QUESTIONS}개</span>
               </div>
 
-              {/* CLOVA 음성 선택 */}
+              {/* 면접관 음성 선택 (Qwen3 TTS) */}
               <div className="mock-interview__settings">
                 <label className="mock-interview__settings-label">면접관 음성</label>
                 <Dropdown
@@ -628,6 +643,11 @@ export default function MockInterview() {
               <div className="mock-interview__intro-icon">🎙️</div>
               <h2>면접 준비 중...</h2>
               <p>질문 음성을 미리 로딩하고 있습니다.</p>
+              {preloadError && (
+                <p className="mock-interview__preload-error">
+                  ⚠️ {preloadError} (질문 표시 시 음성으로 시도합니다)
+                </p>
+              )}
               <div className="mock-interview__loading-progress">
                 <div className="mock-interview__progress-bar">
                   <div

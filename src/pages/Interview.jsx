@@ -852,7 +852,6 @@ export default function CoachPage() {
         <header className="coach__header">
           <div>
             <h1>AI 면접 코칭</h1>
-            
           </div>
           <div className="coach__tabs">
             <button

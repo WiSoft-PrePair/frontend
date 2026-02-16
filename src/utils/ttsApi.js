@@ -1,61 +1,84 @@
 const API_BASE = '/api'
 
 /**
- * ElevenLabs TTS API
+ * Qwen3 TTS API
  *
- * ElevenLabs를 사용한 Text-to-Speech (Voice Cloning 지원)
+ * Alibaba Cloud Qwen3-TTS를 사용한 Text-to-Speech
  * 백엔드 프록시를 통해 호출 (API Key 보안)
  *
- * @see https://elevenlabs.io/docs/api-reference/text-to-speech
+ * @see https://www.alibabacloud.com/help/en/model-studio/qwen-tts-api
  */
 
-// 사용 가능한 음성 목록 (ElevenLabs Voices)
-export const ELEVENLABS_SPEAKERS = {
-  // 커스텀 클론 음성
-  changu2: { name: '찬구', voiceId: 'nZOfECqWUuNiKrnh8geY', gender: 'male', lang: 'ko', description: '킹받음' },
-  adult: { name: '성인', voiceId: 'ZJCNdZEjYwkOElxugmW2', gender: 'male', lang: 'ko', description: '일반 성인 남성' },
-  animalKingdom: { name: '동물의 왕국', voiceId: 's07IwTCOrCDCaETjUVjx', gender: 'male', lang: 'ko', description: '동물의 왕국 나레이션' },
+// Qwen3 TTS 지원 음성 (한국어 면접관 추천)
+export const QWEN3_SPEAKERS = {
+  sohee: {
+    name: '소희',
+    voice: 'Sohee',
+    gender: 'female',
+    lang: 'ko',
+    description: '부드럽고 밝은 한국어 언니',
+  },
+  ethan: {
+    name: '이든',
+    voice: 'Ethan',
+    gender: 'male',
+    lang: 'ko',
+    description: '밝고 따뜻한 남성',
+  },
+  cherry: {
+    name: '체리',
+    voice: 'Cherry',
+    gender: 'female',
+    lang: 'ko',
+    description: '친근하고 긍정적인 여성',
+  },
+  serena: {
+    name: '세레나',
+    voice: 'Serena',
+    gender: 'female',
+    lang: 'ko',
+    description: '부드러운 여성',
+  },
+  ryan: {
+    name: '라이언',
+    voice: 'Ryan',
+    gender: 'male',
+    lang: 'ko',
+    description: '리듬감 있고 진지한 남성',
+  },
 }
 
-// 기본 설정
 const DEFAULT_OPTIONS = {
-  speaker: 'changu2',          // 기본 음성: 찬구2
-  stability: 0.5,              // 안정성: 0.0 ~ 1.0 (낮을수록 다양한 표현)
-  similarityBoost: 0.75,       // 원본 유사도: 0.0 ~ 1.0 (높을수록 원본과 유사)
-  style: 0,                    // 스타일: 0.0 ~ 1.0 (높을수록 표현력 증가)
-  useSpeakerBoost: true,       // 스피커 부스트 사용
-  speed: 0.85,                 // 속도: 0.25 ~ 4.0 (1.0이 기본, 낮을수록 느림)
+  speaker: 'sohee',
+  language_type: 'Korean',
 }
+
+const MAX_TEXT_LENGTH = 600
 
 /**
  * 텍스트를 음성으로 변환
- * @param {string} text - 변환할 텍스트 (최대 5000자)
+ * @param {string} text - 변환할 텍스트 (최대 600자)
  * @param {Object} options - TTS 옵션
  * @param {AbortSignal} signal - 취소용 AbortSignal (optional)
- * @returns {Promise<Blob>} 오디오 Blob
+ * @returns {Promise<Blob>} 오디오 Blob (audio/wav)
  */
 export async function textToSpeech(text, options = {}, signal = null) {
   if (!text || text.trim().length === 0) {
     throw new Error('텍스트가 비어있습니다.')
   }
 
-  if (text.length > 5000) {
-    throw new Error('텍스트는 최대 5000자까지 가능합니다.')
+  if (text.length > MAX_TEXT_LENGTH) {
+    throw new Error(`텍스트는 최대 ${MAX_TEXT_LENGTH}자까지 가능합니다.`)
   }
 
-  // speaker 키를 voice_id로 변환
   const speakerKey = options.speaker || DEFAULT_OPTIONS.speaker
-  const speakerInfo = ELEVENLABS_SPEAKERS[speakerKey]
-  const voiceId = speakerInfo?.voiceId || ELEVENLABS_SPEAKERS.changu2.voiceId
+  const speakerInfo = QWEN3_SPEAKERS[speakerKey]
+  const voice = speakerInfo?.voice || QWEN3_SPEAKERS.sohee.voice
 
   const params = {
-    text,
-    voiceId,
-    stability: options.stability ?? DEFAULT_OPTIONS.stability,
-    similarityBoost: options.similarityBoost ?? DEFAULT_OPTIONS.similarityBoost,
-    style: options.style ?? DEFAULT_OPTIONS.style,
-    useSpeakerBoost: options.useSpeakerBoost ?? DEFAULT_OPTIONS.useSpeakerBoost,
-    speed: options.speed ?? DEFAULT_OPTIONS.speed,
+    text: text.trim(),
+    voice,
+    language_type: options.language_type ?? DEFAULT_OPTIONS.language_type,
   }
 
   try {
@@ -65,18 +88,45 @@ export async function textToSpeech(text, options = {}, signal = null) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(params),
-      signal, // AbortSignal 전달
+      signal,
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.message || 'TTS 변환에 실패했습니다.')
+      const rawText = await response.text()
+      let msg = 'TTS 변환에 실패했습니다.'
+
+      try {
+        const errorData = JSON.parse(rawText)
+        msg = errorData.error || errorData.message || msg
+        if (errorData.details) {
+          console.error('[ttsApi] 서버 상세:', errorData.details)
+        }
+      } catch (_) {
+        console.error('[ttsApi] 500 응답 원문:', rawText.substring(0, 500))
+        if (rawText.length > 0) msg = rawText.substring(0, 200)
+      }
+
+      throw new Error(msg)
+    }
+
+    const contentType = response.headers.get('Content-Type') || ''
+    if (!contentType.includes('audio/')) {
+      const text = await response.text()
+      console.error('[ttsApi] Non-audio response:', text.substring(0, 200))
+      throw new Error('TTS 서버가 오디오 대신 오류를 반환했습니다.')
     }
 
     return response.blob()
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw error // 취소된 경우 그대로 throw
+      throw error
+    }
+    const isNetworkError =
+      error.name === 'TypeError' ||
+      error.message?.includes('Failed to fetch') ||
+      error.message?.includes('NetworkError')
+    if (isNetworkError) {
+      throw new Error('TTS 서버에 연결할 수 없습니다. (로컬: pnpm tts-proxy 실행, 배포: DASHSCOPE_API_KEY 확인)')
     }
     console.error('[ttsApi] textToSpeech error:', error)
     throw error
@@ -85,9 +135,6 @@ export async function textToSpeech(text, options = {}, signal = null) {
 
 /**
  * 텍스트를 음성으로 변환하고 재생
- * @param {string} text - 변환할 텍스트
- * @param {Object} options - TTS 옵션
- * @returns {Promise<HTMLAudioElement>} 오디오 엘리먼트
  */
 export async function speakText(text, options = {}) {
   const blob = await textToSpeech(text, options)
@@ -95,7 +142,6 @@ export async function speakText(text, options = {}) {
 
   const audio = new Audio(url)
 
-  // 재생 완료 시 URL 해제
   audio.onended = () => {
     URL.revokeObjectURL(url)
   }
@@ -106,13 +152,10 @@ export async function speakText(text, options = {}) {
 
 /**
  * 긴 텍스트를 청크로 나누어 순차 재생
- * @param {string} text - 변환할 텍스트
- * @param {Object} options - TTS 옵션
- * @param {Function} onProgress - 진행 콜백 (currentIndex, total)
- * @returns {Promise<void>}
+ * Qwen3는 최대 600자이므로 500자로 청크 분할
  */
 export async function speakLongText(text, options = {}, onProgress) {
-  const chunks = splitTextIntoChunks(text, 4500) // Typecast는 5000자까지 지원, 여유있게 4500자로 분할
+  const chunks = splitTextIntoChunks(text, 500)
 
   for (let i = 0; i < chunks.length; i++) {
     if (onProgress) {
@@ -121,7 +164,6 @@ export async function speakLongText(text, options = {}, onProgress) {
 
     const audio = await speakText(chunks[i], options)
 
-    // 현재 청크 재생 완료 대기
     await new Promise((resolve) => {
       audio.onended = resolve
     })
@@ -129,10 +171,7 @@ export async function speakLongText(text, options = {}, onProgress) {
 }
 
 /**
- * 텍스트를 청크로 분할 (문장 단위로 분할 시도)
- * @param {string} text - 원본 텍스트
- * @param {number} maxLength - 청크 최대 길이
- * @returns {string[]} 청크 배열
+ * 텍스트를 청크로 분할
  */
 function splitTextIntoChunks(text, maxLength) {
   if (text.length <= maxLength) {
@@ -148,7 +187,6 @@ function splitTextIntoChunks(text, maxLength) {
       break
     }
 
-    // 문장 끝 찾기 (마침표, 물음표, 느낌표)
     let splitIndex = -1
     const searchEnd = Math.min(remaining.length, maxLength)
 
@@ -159,7 +197,6 @@ function splitTextIntoChunks(text, maxLength) {
       }
     }
 
-    // 문장 끝을 못 찾으면 공백에서 분할
     if (splitIndex === -1) {
       for (let i = searchEnd - 1; i >= maxLength * 0.5; i--) {
         if (remaining[i] === ' ' || remaining[i] === '\n') {
@@ -169,7 +206,6 @@ function splitTextIntoChunks(text, maxLength) {
       }
     }
 
-    // 그래도 못 찾으면 강제 분할
     if (splitIndex === -1) {
       splitIndex = maxLength
     }

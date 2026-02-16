@@ -1,17 +1,17 @@
 import { useState, useRef, useCallback } from 'react'
-import { textToSpeech, ELEVENLABS_SPEAKERS } from '../utils/ttsApi'
+import { textToSpeech, QWEN3_SPEAKERS } from '../utils/ttsApi'
 
 /**
- * TTS (Text-to-Speech) 커스텀 훅 - ElevenLabs 버전
+ * TTS (Text-to-Speech) 커스텀 훅 - Qwen3 TTS 버전
  *
  * @example
  * const { speak, stop, isPlaying, isLoading, error } = useTTS()
  *
- * // 기본 사용 (찬구 음성 - 클론)
+ * // 기본 사용 (소희 음성)
  * await speak('안녕하세요')
  *
  * // 옵션 지정
- * await speak('안녕하세요', { speaker: 'changu', stability: 0.5, similarityBoost: 0.8 })
+ * await speak('안녕하세요', { speaker: 'ethan' })
  */
 export function useTTS(defaultOptions = {}) {
   const [isPlaying, setIsPlaying] = useState(false)
@@ -120,7 +120,7 @@ export function useTTS(defaultOptions = {}) {
       return
     }
 
-    const chunks = splitTextIntoChunks(text, 4500)
+    const chunks = splitTextIntoChunks(text, 500)
     setProgress({ current: 0, total: chunks.length })
     setIsLoading(true)
     setError(null)
@@ -182,7 +182,7 @@ export function useTTS(defaultOptions = {}) {
     isLoading,
     error,
     progress,
-    speakers: ELEVENLABS_SPEAKERS,
+    speakers: QWEN3_SPEAKERS,
   }
 }
 

@@ -1,58 +1,59 @@
 /**
  * 개발용 TTS 프록시 서버
- * ElevenLabs API를 로컬에서 테스트하기 위한 프록시
+ * Qwen3 TTS (Alibaba DashScope) API를 로컬에서 테스트하기 위한 프록시
  *
- * 실행: npm run tts-proxy 또는 node scripts/tts-proxy.js
+ * 실행: pnpm tts-proxy (또는 npm run tts-proxy)
+ *
+ * .env 파일에 DASHSCOPE_API_KEY를 설정하세요.
  */
 
 import http from 'http'
 import https from 'https'
-import {config} from 'dotenv'
-import {fileURLToPath} from 'url'
-import {dirname, join} from 'path'
+import { config } from 'dotenv'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-// .env 파일 로드
-config({path: join(__dirname, '..', '.env')})
+config({ path: join(__dirname, '..', '.env') })
 
 const PORT = 3001
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY
+const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY
+const DASHSCOPE_REGION = process.env.DASHSCOPE_REGION || 'intl' // 'intl' | 'cn'
 
-// 기본값
+const DASHSCOPE_HOST =
+  DASHSCOPE_REGION === 'cn'
+    ? 'dashscope.aliyuncs.com'
+    : 'dashscope-intl.aliyuncs.com'
+
 const DEFAULTS = {
-  voiceId: 'nZOfECqWUuNiKrnh8geY', // 찬구 (클론)
-  stability: 0.5,
-  similarityBoost: 0.75,
-  style: 0,
-  useSpeakerBoost: true,
-  speed: 1,
+  voice: 'Sohee',
+  language_type: 'Korean',
 }
 
-if (!ELEVENLABS_API_KEY) {
+const MAX_TEXT_LENGTH = 600
+
+if (!DASHSCOPE_API_KEY) {
   console.error('Error: 환경 변수가 설정되지 않았습니다.')
-  console.error('   .env 파일에 ELEVENLABS_API_KEY를 설정하세요.')
+  console.error('   .env 파일에 DASHSCOPE_API_KEY를 설정하세요.')
   process.exit(1)
 }
 
 const server = http.createServer((req, res) => {
-  // CORS 헤더
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
-  // Preflight 요청 처리
   if (req.method === 'OPTIONS') {
     res.writeHead(204)
     res.end()
     return
   }
 
-  // POST /api/tts만 처리
   if (req.method !== 'POST' || req.url !== '/api/tts') {
-    res.writeHead(404, {'Content-Type': 'application/json'})
-    res.end(JSON.stringify({error: 'Not Found'}))
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Not Found' }))
     return
   }
 
@@ -62,96 +63,142 @@ const server = http.createServer((req, res) => {
     body += chunk.toString()
   })
 
-  req.on('end', () => {
+  req.on('end', async () => {
     try {
+      const parsed = JSON.parse(body)
       const {
         text,
-        voiceId = DEFAULTS.voiceId,
-        stability = DEFAULTS.stability,
-        similarityBoost = DEFAULTS.similarityBoost,
-        style = DEFAULTS.style,
-        useSpeakerBoost = DEFAULTS.useSpeakerBoost,
-        speed = DEFAULTS.speed,
-      } = JSON.parse(body)
+        voice = DEFAULTS.voice,
+        language_type = DEFAULTS.language_type,
+      } = parsed
 
-      if (!text) {
-        res.writeHead(400, {'Content-Type': 'application/json'})
-        res.end(JSON.stringify({error: 'text is required'}))
+      if (!text || typeof text !== 'string') {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'text is required' }))
         return
       }
 
-      // ElevenLabs API 요청 데이터
-      const requestBody = JSON.stringify({
-        text,
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: {
-          stability: Number(stability) || 0.5,
-          similarity_boost: Number(similarityBoost) || 0.75,
-          style: Number(style) || 0,
-          use_speaker_boost: useSpeakerBoost,
-          speed: Number(speed) || 0.85,
+      const trimmedText = text.trim()
+      if (trimmedText.length === 0) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'text cannot be empty' }))
+        return
+      }
+
+      if (trimmedText.length > MAX_TEXT_LENGTH) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(
+          JSON.stringify({
+            error: `text must be at most ${MAX_TEXT_LENGTH} characters`,
+          })
+        )
+        return
+      }
+
+      const dashScopeBody = JSON.stringify({
+        model: 'qwen3-tts-flash',
+        input: {
+          text: trimmedText,
+          voice,
+          language_type,
         },
       })
 
       const options = {
-        hostname: 'api.elevenlabs.io',
+        hostname: DASHSCOPE_HOST,
         port: 443,
-        path: `/v1/text-to-speech/${voiceId}`,
+        path: '/api/v1/services/aigc/multimodal-generation/generation',
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'xi-api-key': ELEVENLABS_API_KEY,
-          'Content-Length': Buffer.byteLength(requestBody),
+          Authorization: `Bearer ${DASHSCOPE_API_KEY}`,
+          'Content-Length': Buffer.byteLength(dashScopeBody),
         },
       }
 
-      const elevenLabsReq = https.request(options, (elevenLabsRes) => {
-        if (elevenLabsRes.statusCode !== 200) {
-          let errorBody = ''
-          elevenLabsRes.on('data', (chunk) => {
-            errorBody += chunk.toString()
-          })
-          elevenLabsRes.on('end', () => {
-            console.error('ElevenLabs API Error:', elevenLabsRes.statusCode, errorBody)
-            res.writeHead(elevenLabsRes.statusCode, {'Content-Type': 'application/json'})
-            res.end(JSON.stringify({error: 'ElevenLabs API Error', details: errorBody}))
-          })
-          return
-        }
-
-        // 오디오 데이터 스트리밍
-        res.writeHead(200, {
-          'Content-Type': 'audio/mpeg',
-          'Transfer-Encoding': 'chunked',
+      const dashScopeReq = https.request(options, async (dashScopeRes) => {
+        let responseBody = ''
+        dashScopeRes.on('data', (chunk) => {
+          responseBody += chunk.toString()
         })
 
-        elevenLabsRes.pipe(res)
+        dashScopeRes.on('end', async () => {
+          if (dashScopeRes.statusCode !== 200) {
+            let errorMsg = 'DashScope API 오류'
+            try {
+              const errJson = JSON.parse(responseBody)
+              errorMsg = errJson.message || errJson.code || errorMsg
+              if (errJson.message && errJson.code) {
+                errorMsg = `${errJson.code}: ${errJson.message}`
+              }
+            } catch (_) {
+              errorMsg = responseBody.substring(0, 200) || errorMsg
+            }
+            console.error('DashScope API Error:', dashScopeRes.statusCode, responseBody)
+            res.writeHead(dashScopeRes.statusCode, { 'Content-Type': 'application/json' })
+            res.end(
+              JSON.stringify({
+                error: errorMsg,
+                details: responseBody,
+              })
+            )
+            return
+          }
+
+          const json = JSON.parse(responseBody)
+          const audioUrl = json.output?.audio?.url
+
+          if (!audioUrl) {
+            console.error('No audio URL in response:', json)
+            res.writeHead(500, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'No audio URL in response' }))
+            return
+          }
+
+          try {
+            const audioRes = await fetch(audioUrl)
+            if (!audioRes.ok) {
+              throw new Error(`Failed to fetch audio: ${audioRes.status}`)
+            }
+            const audioBuffer = await audioRes.arrayBuffer()
+            res.writeHead(200, {
+              'Content-Type': 'audio/wav',
+              'Content-Length': audioBuffer.byteLength,
+            })
+            res.end(Buffer.from(audioBuffer))
+          } catch (fetchErr) {
+            console.error('Error fetching audio:', fetchErr)
+            res.writeHead(500, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'Failed to fetch audio file' }))
+          }
+        })
       })
 
-      elevenLabsReq.on('error', (error) => {
+      dashScopeReq.on('error', (error) => {
         console.error('Request Error:', error)
-        res.writeHead(500, {'Content-Type': 'application/json'})
-        res.end(JSON.stringify({error: error.message}))
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: error.message }))
       })
 
-      elevenLabsReq.write(requestBody)
-      elevenLabsReq.end()
+      dashScopeReq.write(dashScopeBody)
+      dashScopeReq.end()
 
-      console.log(`TTS 요청: "${text.substring(0, 30)}..." (voice: ${voiceId})`)
+      console.log(`TTS 요청: "${trimmedText.substring(0, 30)}..." (voice: ${voice})`)
     } catch (error) {
       console.error('Parse Error:', error)
-      res.writeHead(400, {'Content-Type': 'application/json'})
-      res.end(JSON.stringify({error: 'Invalid JSON'}))
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Invalid JSON' }))
     }
   })
 })
 
 server.listen(PORT, () => {
   console.log('')
-  console.log('TTS 프록시 서버가 시작되었습니다 (ElevenLabs)')
+  console.log('TTS 프록시 서버가 시작되었습니다 (Qwen3 TTS)')
   console.log(`   http://localhost:${PORT}/api/tts`)
+  console.log(`   리전: ${DASHSCOPE_REGION} (${DASHSCOPE_HOST})`)
   console.log('')
   console.log('Vite 개발 서버와 함께 사용하세요:')
-  console.log('   npm run dev (다른 터미널에서)')
+  console.log('   pnpm dev (다른 터미널에서)')
   console.log('')
 })

@@ -1,134 +1,124 @@
 /**
- * Vercel Serverless Function - ElevenLabs TTS Proxy
+ * Vercel Serverless Function - Qwen3 TTS Proxy
  *
  * 환경변수 설정 필요 (Vercel Dashboard > Settings > Environment Variables):
- * - ELEVENLABS_API_KEY: ElevenLabs API Key
+ * - DASHSCOPE_API_KEY: Alibaba Cloud Model Studio API Key (Qwen3 TTS)
  *
- * @see https://elevenlabs.io/docs/api-reference/text-to-speech
+ * @see https://www.alibabacloud.com/help/en/model-studio/qwen-tts-api
  *
- * [백엔드 마이그레이션 시 참고]
- * 이 파일의 로직을 NestJS 컨트롤러로 옮기면 됩니다.
  * 엔드포인트: POST /api/tts
- * 요청 본문: { text, voiceId, stability, similarityBoost, style, useSpeakerBoost }
- * 응답: audio/mpeg 바이너리
+ * 요청 본문: { text, voice, language_type }
+ * 응답: audio/wav 바이너리
  */
 
-// 기본값
 const DEFAULTS = {
-  voiceId: 'ctdr2dNInXnThzWJXouh', // 찬구 (클론)
-  stability: 0.5,
-  similarityBoost: 0.75,
-  style: 0,
-  useSpeakerBoost: true,
-  speed: 0.85,
+  voice: 'Sohee',
+  language_type: 'Korean',
 }
 
+const MAX_TEXT_LENGTH = 600
+
+const DASHSCOPE_HOST =
+  process.env.DASHSCOPE_REGION === 'cn'
+    ? 'dashscope.aliyuncs.com'
+    : 'dashscope-intl.aliyuncs.com'
+
 export default async function handler(req, res) {
-  // CORS 헤더 설정
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
-  // Preflight 요청 처리
   if (req.method === 'OPTIONS') {
     return res.status(200).end()
   }
 
-  // POST만 허용
   if (req.method !== 'POST') {
-    return res.status(405).json({error: 'Method not allowed'})
+    return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  // 환경변수 확인
-  const apiKey = process.env.ELEVENLABS_API_KEY
+  const apiKey = process.env.DASHSCOPE_API_KEY
 
   if (!apiKey) {
-    console.error('[TTS] Missing ELEVENLABS_API_KEY')
-    return res.status(500).json({error: 'TTS 서비스가 설정되지 않았습니다.'})
+    console.error('[TTS] Missing DASHSCOPE_API_KEY')
+    return res.status(500).json({ error: 'TTS 서비스가 설정되지 않았습니다.' })
   }
 
   try {
     const body = req.body || {}
-    const {
-      text,
-      voiceId = DEFAULTS.voiceId,
-      stability = DEFAULTS.stability,
-      similarityBoost = DEFAULTS.similarityBoost,
-      style = DEFAULTS.style,
-      useSpeakerBoost = DEFAULTS.useSpeakerBoost,
-      speed = DEFAULTS.speed,
-    } = body
+    const { text, voice = DEFAULTS.voice, language_type = DEFAULTS.language_type } = body
 
-    // 입력 검증
     if (!text || typeof text !== 'string') {
-      return res.status(400).json({error: '텍스트가 필요합니다.'})
+      return res.status(400).json({ error: '텍스트가 필요합니다.' })
     }
 
-    if (text.length > 5000) {
-      return res.status(400).json({error: '텍스트는 최대 5000자까지 가능합니다.'})
+    const trimmedText = text.trim()
+    if (trimmedText.length === 0) {
+      return res.status(400).json({ error: '텍스트가 비어있습니다.' })
     }
 
-    // 숫자 범위 검증
-    const numStability = Math.max(0, Math.min(1, Number(stability) || 0.5))
-    const numSimilarityBoost = Math.max(0, Math.min(1, Number(similarityBoost) || 0.75))
-    const numStyle = Math.max(0, Math.min(1, Number(style) || 0))
-    const numSpeed = Math.max(0.25, Math.min(4.0, Number(speed) || 0.85))
-
-    // ElevenLabs API 요청 본문
-    const requestBody = {
-      text,
-      model_id: 'eleven_multilingual_v2',
-      voice_settings: {
-        stability: numStability,
-        similarity_boost: numSimilarityBoost,
-        style: numStyle,
-        use_speaker_boost: useSpeakerBoost,
-        speed: numSpeed,
-      },
+    if (trimmedText.length > MAX_TEXT_LENGTH) {
+      return res
+        .status(400)
+        .json({ error: `텍스트는 최대 ${MAX_TEXT_LENGTH}자까지 가능합니다.` })
     }
 
-    // ElevenLabs API 호출
-    const elevenLabsResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    // Qwen3 TTS API 호출 (DashScope)
+    const dashScopeResponse = await fetch(
+      `https://${DASHSCOPE_HOST}/api/v1/services/aigc/multimodal-generation/generation`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'xi-api-key': apiKey,
+          Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({
+          model: 'qwen3-tts-flash',
+          input: {
+            text: trimmedText,
+            voice,
+            language_type,
+          },
+        }),
       }
     )
 
-    if (!elevenLabsResponse.ok) {
-      const errorText = await elevenLabsResponse.text()
-      console.error('[TTS] ElevenLabs API error:', elevenLabsResponse.status, errorText)
+    const json = await dashScopeResponse.json()
 
-      if (elevenLabsResponse.status === 401) {
-        return res.status(500).json({error: 'API 인증에 실패했습니다.'})
+    if (!dashScopeResponse.ok) {
+      const errMsg =
+        json.message || json.code || JSON.stringify(json).substring(0, 200) || 'Unknown error'
+      console.error('[TTS] DashScope API error:', dashScopeResponse.status, errMsg)
+
+      if (dashScopeResponse.status === 401) {
+        return res.status(500).json({ error: 'API 인증에 실패했습니다.' })
       }
-      if (elevenLabsResponse.status === 402 || elevenLabsResponse.status === 403) {
-        return res.status(402).json({error: '크레딧이 부족하거나 권한이 없습니다.'})
-      }
-      if (elevenLabsResponse.status === 404) {
-        return res.status(404).json({error: '음성을 찾을 수 없습니다.'})
-      }
-      if (elevenLabsResponse.status === 429) {
-        return res.status(429).json({error: '요청 한도를 초과했습니다.'})
+      if (dashScopeResponse.status === 429) {
+        return res.status(429).json({ error: '요청 한도를 초과했습니다.' })
       }
 
-      return res.status(500).json({error: 'TTS 변환에 실패했습니다.'})
+      return res.status(500).json({ error: errMsg || 'TTS 변환에 실패했습니다.' })
     }
 
-    // 오디오 바이너리 응답
-    const audioBuffer = await elevenLabsResponse.arrayBuffer()
+    const audioUrl = json.output?.audio?.url
+    if (!audioUrl) {
+      console.error('[TTS] No audio URL in response:', json)
+      return res.status(500).json({ error: 'TTS 응답에 오디오 URL이 없습니다.' })
+    }
 
-    res.setHeader('Content-Type', 'audio/mpeg')
+    // URL에서 오디오 바이너리 가져오기
+    const audioResponse = await fetch(audioUrl)
+    if (!audioResponse.ok) {
+      console.error('[TTS] Failed to fetch audio from URL:', audioResponse.status)
+      return res.status(500).json({ error: '오디오 파일을 불러오는데 실패했습니다.' })
+    }
+
+    const audioBuffer = await audioResponse.arrayBuffer()
+
+    res.setHeader('Content-Type', 'audio/wav')
     res.setHeader('Content-Length', audioBuffer.byteLength)
-
     return res.send(Buffer.from(audioBuffer))
   } catch (error) {
     console.error('[TTS] Unexpected error:', error)
-    return res.status(500).json({error: '서버 오류가 발생했습니다.'})
+    return res.status(500).json({ error: '서버 오류가 발생했습니다.' })
   }
 }

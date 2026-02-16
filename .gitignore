@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment variables (API keys 등 민감 정보)
+.env
+.env.local
+.env.*.local
+
+# Build
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
