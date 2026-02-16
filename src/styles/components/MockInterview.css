@@ -32,9 +32,16 @@
 
 .mock-interview__intro > p {
   color: var(--color-dark-400);
-  line-height: 1.6;
-  margin-bottom: var(--spacing-xl);
+}
+
+.mock-interview__preload-error {
+  margin: var(--spacing-sm) 0 var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(245, 158, 11, 0.15);
+  border-radius: var(--radius-md);
+  color: var(--color-warning);
   font-size: var(--font-size-sm);
+  line-height: 1.6;
 }
 
 .mock-interview__features {
