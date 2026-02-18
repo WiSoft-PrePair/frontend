@@ -471,9 +471,7 @@ const handleResetPassword = async () => {
                       onChange={(e) => setSignupForm((p) => ({ ...p, email: e.target.value }))}
                       disabled={authMethod === 'kakao'}
                     />
-                    {authMethod === 'email' && (
-                      <p className="form-helper">테스트용: 아무 값이나 입력 가능</p>
-                    )}
+                  
                   </div>
 
                   {authMethod === 'email' && (
@@ -708,12 +706,10 @@ const handleResetPassword = async () => {
                     <input
                       type="text"
                       className="form-input"
-                      placeholder="test, admin, demo 또는 아무 값"
                       value={loginForm.email}
                       onChange={(e) => setLoginForm((p) => ({ ...p, email: e.target.value }))}
                       autoFocus
                     />
-                    <p className="form-helper">테스트 계정: test/test, admin/admin, demo/demo</p>
                   </div>
 
                   <div className="form-group">
@@ -721,7 +717,7 @@ const handleResetPassword = async () => {
                     <input
                       type="password"
                       className="form-input"
-                      placeholder="비밀번호 (아무 값이나 가능)"
+
                       value={loginForm.password}
                       onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
                     />

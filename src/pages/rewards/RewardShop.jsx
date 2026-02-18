@@ -2,66 +2,8 @@ import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { motion as Motion } from 'framer-motion'
 import { useAppState } from '../../context/AppStateContext'
+import { rewards, rewardCategories as categories } from '../../data/mockDataForDemo'
 import '../../styles/pages/Rewards.css'
-
-const rewards = [
-  {
-    id: 'coffee-1',
-    name: '스타벅스 아메리카노',
-    description: '면접 준비하면서 마실 커피 한 잔',
-    points: 500,
-    icon: '☕',
-    category: 'cafe',
-  },
-  {
-    id: 'coffee-2',
-    name: '투썸 아이스크림 음료',
-    description: '달콤한 아이스크림 음료로 기분 전환',
-    points: 600,
-    icon: '🍨',
-    category: 'cafe',
-  },
-  {
-    id: 'cu-1',
-    name: 'CU 편의점 2,000원권',
-    description: '든든한 간식으로 에너지 충전',
-    points: 400,
-    icon: '🏪',
-    category: 'convenience',
-  },
-  {
-    id: 'gs-1',
-    name: 'GS25 3,000원권',
-    description: '간단한 식사나 간식 구매',
-    points: 600,
-    icon: '🛒',
-    category: 'convenience',
-  },
-  {
-    id: 'book-1',
-    name: '교보문고 5,000원권',
-    description: '면접 준비 도서 구매',
-    points: 1000,
-    icon: '📚',
-    category: 'study',
-  },
-  {
-    id: 'movie-1',
-    name: 'CGV 영화 관람권',
-    description: '면접 준비 스트레스 해소',
-    points: 2000,
-    icon: '🎬',
-    category: 'entertainment',
-  },
-]
-
-const categories = [
-  { id: 'all', label: '전체' },
-  { id: 'cafe', label: '카페' },
-  { id: 'convenience', label: '편의점' },
-  { id: 'study', label: '자기계발' },
-  { id: 'entertainment', label: '엔터테인먼트' },
-]
 
 export default function RewardShop() {
   const navigate = useNavigate()
