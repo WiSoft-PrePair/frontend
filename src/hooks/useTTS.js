@@ -1,17 +1,12 @@
 import { useState, useRef, useCallback } from 'react'
-import { textToSpeech, QWEN3_SPEAKERS } from '../utils/ttsApi'
+import { textToSpeech, TTS_SPEAKERS } from '../utils/ttsApi'
 
 /**
- * TTS (Text-to-Speech) 커스텀 훅 - Qwen3 TTS 버전
+ * TTS (Text-to-Speech) 커스텀 훅
  *
  * @example
  * const { speak, stop, isPlaying, isLoading, error } = useTTS()
- *
- * // 기본 사용 (소희 음성)
- * await speak('안녕하세요')
- *
- * // 옵션 지정
- * await speak('안녕하세요', { speaker: 'ethan' })
+ * await speak('안녕하세요') // 기본 음성
  */
 export function useTTS(defaultOptions = {}) {
   const [isPlaying, setIsPlaying] = useState(false)
@@ -182,7 +177,7 @@ export function useTTS(defaultOptions = {}) {
     isLoading,
     error,
     progress,
-    speakers: QWEN3_SPEAKERS,
+    speakers: TTS_SPEAKERS,
   }
 }
 
