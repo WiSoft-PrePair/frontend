@@ -43,8 +43,8 @@ export default function MockInterview() {
   const [audioLevel, setAudioLevel] = useState(0)
   const [isQuestionVisible, setIsQuestionVisible] = useState(false)
 
-  // Qwen3 TTS
-  const [selectedSpeaker, setSelectedSpeaker] = useState('sohee')
+  // TTS 음성 선택
+  const [selectedSpeaker, setSelectedSpeaker] = useState('alloy_calm')
   const { stop: stopTTS, isPlaying: isTTSPlaying, isLoading: isTTSLoading, speakers } = useTTS()
 
   // 프리로딩된 오디오
@@ -600,7 +600,7 @@ export default function MockInterview() {
                 <span className="mock-interview__count-hint">최대 {MAX_QUESTIONS}개</span>
               </div>
 
-              {/* 면접관 음성 선택 (Qwen3 TTS) */}
+              {/* 면접관 음성 선택 */}
               <div className="mock-interview__settings">
                 <label className="mock-interview__settings-label">면접관 음성</label>
                 <Dropdown

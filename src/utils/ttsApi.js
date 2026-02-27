@@ -1,55 +1,46 @@
 const API_BASE = '/api'
 
 /**
- * Qwen3 TTS API
+ * 공용 TTS API 클라이언트
  *
- * Alibaba Cloud Qwen3-TTS를 사용한 Text-to-Speech
- * 백엔드 프록시를 통해 호출 (API Key 보안)
- *
- * @see https://www.alibabacloud.com/help/en/model-studio/qwen-tts-api
+ * 백엔드의 `/api/tts` 엔드포인트(OpenAI TTS 등)를 호출해
+ * 텍스트를 음성으로 변환합니다.
  */
 
-// Qwen3 TTS 지원 음성 (한국어 면접관 추천)
-export const QWEN3_SPEAKERS = {
-  sohee: {
-    name: '소희',
-    voice: 'Sohee',
-    gender: 'female',
+// 지원 음성 프리셋 (OpenAI TTS 기반, 한국어 사용에 적합한 톤 설명)
+export const TTS_SPEAKERS = {
+  alloy_calm: {
+    name: '차분한 기본 음성',
+    voice: 'alloy',
+    gender: 'neutral',
     lang: 'ko',
-    description: '부드럽고 밝은 한국어 언니',
+    description: '차분하고 또렷한 기본 한국어 음성',
   },
-  ethan: {
-    name: '이든',
-    voice: 'Ethan',
-    gender: 'male',
+  alloy_bright: {
+    name: '밝은 기본 음성',
+    voice: 'alloy',
+    gender: 'neutral',
     lang: 'ko',
-    description: '밝고 따뜻한 남성',
+    description: '조금 더 경쾌하고 에너지가 느껴지는 톤',
   },
-  cherry: {
-    name: '체리',
-    voice: 'Cherry',
-    gender: 'female',
+  verse_soft: {
+    name: '부드러운 면접관',
+    voice: 'verse',
+    gender: 'neutral',
     lang: 'ko',
-    description: '친근하고 긍정적인 여성',
+    description: '편안하고 부드러운 설명형 톤',
   },
-  serena: {
-    name: '세레나',
-    voice: 'Serena',
-    gender: 'female',
+  verse_serious: {
+    name: '진지한 면접관',
+    voice: 'verse',
+    gender: 'neutral',
     lang: 'ko',
-    description: '부드러운 여성',
-  },
-  ryan: {
-    name: '라이언',
-    voice: 'Ryan',
-    gender: 'male',
-    lang: 'ko',
-    description: '리듬감 있고 진지한 남성',
+    description: '조금 더 진중하고 또렷한 피드백 톤',
   },
 }
 
 const DEFAULT_OPTIONS = {
-  speaker: 'sohee',
+  speaker: 'alloy_calm',
   language_type: 'Korean',
 }
 
@@ -72,8 +63,8 @@ export async function textToSpeech(text, options = {}, signal = null) {
   }
 
   const speakerKey = options.speaker || DEFAULT_OPTIONS.speaker
-  const speakerInfo = QWEN3_SPEAKERS[speakerKey]
-  const voice = speakerInfo?.voice || QWEN3_SPEAKERS.sohee.voice
+  const speakerInfo = TTS_SPEAKERS[speakerKey]
+  const voice = speakerInfo?.voice || TTS_SPEAKERS.sohee.voice
 
   const params = {
     text: text.trim(),
@@ -125,9 +116,9 @@ export async function textToSpeech(text, options = {}, signal = null) {
       error.name === 'TypeError' ||
       error.message?.includes('Failed to fetch') ||
       error.message?.includes('NetworkError')
-    if (isNetworkError) {
-      throw new Error('TTS 서버에 연결할 수 없습니다. (로컬: pnpm tts-proxy 실행, 배포: DASHSCOPE_API_KEY 확인)')
-    }
+  if (isNetworkError) {
+    throw new Error('TTS 서버에 연결할 수 없습니다. 서버 설정을 확인해주세요.')
+  }
     console.error('[ttsApi] textToSpeech error:', error)
     throw error
   }
@@ -152,7 +143,7 @@ export async function speakText(text, options = {}) {
 
 /**
  * 긴 텍스트를 청크로 나누어 순차 재생
- * Qwen3는 최대 600자이므로 500자로 청크 분할
+ * 현재는 최대 600자 제한을 가정하고 500자로 청크 분할
  */
 export async function speakLongText(text, options = {}, onProgress) {
   const chunks = splitTextIntoChunks(text, 500)

@@ -717,7 +717,6 @@ const handleResetPassword = async () => {
                     <input
                       type="password"
                       className="form-input"
-
                       value={loginForm.password}
                       onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
                     />
