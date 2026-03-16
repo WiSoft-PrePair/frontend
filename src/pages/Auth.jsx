@@ -13,6 +13,7 @@ import {
   registerMember,
   requestPasswordResetEmail,
   resetPassword as resetPasswordApi,
+  kakaoPromptLogin,
   kakaoCallback,
   kakaoRegister,
 } from '../utils/memberApi'
@@ -302,40 +303,20 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
     setActiveStep((prev) => Math.max(prev - 1, 0))
   }
 
-  // 카카오 OAuth 시작 URL (둘 중 하나 필요)
-  // - VITE_KAKAO_AUTH_URL: 백엔드가 제공하는 카카오 로그인 시작 주소 (REST API 키 불필요)
-  // - VITE_KAKAO_CLIENT_ID: 프론트에서 카카오 인증 페이지로 직접 이동 시 사용
-  const getKakaoAuthUrl = async() => {
-    try{
-      const repsonse = await fetch(`${API_BASE}/auth/kakao/url/?prompt=login`)
-      console.log(repsonse);
-      return handleResponse(response)
-    } catch (error) {
-        throw wrapNetworkError(error);
-    }
-    // const backendAuthUrl = import.meta.env.VITE_KAKAO_AUTH_URL
-    // const clientId = import.meta.env.VITE_KAKAO_CLIENT_ID
-
-    // if (backendAuthUrl) return backendAuthUrl
-    // if (clientId) {
-    //   const redirectUri = import.meta.env.VITE_KAKAO_REDIRECT_URI || `${window.location.origin}/auth`
-    //   const params = new URLSearchParams({
-    //     client_id: clientId,
-    //     redirect_uri: redirectUri,
-    //     response_type: 'code',
-    //   })
-    //   return `https://kauth.kakao.com/oauth/authorize?${params.toString()}`
-    // }
-    // return null
-  }
-
-  const handleKakaoAuth = () => {
+  // 카카오 OAuth 시작: 프론트는 카카오와 직접 통신하지 않고,
+  // 백엔드 /api/auth/kakao/url?prompt=login → 전달받은 url 로만 리다이렉트합니다.
+  const handleKakaoAuth = async () => {
     setError('')
-    const url = getKakaoAuthUrl()
-    if (url) {
+    setIsKakaoAuthenticating(true)
+    try {
+      const res = await kakaoPromptLogin('login')
+      const url = res?.data?.url ?? res?.url
+      if (!url) throw new Error('카카오 로그인 URL을 받지 못했습니다.')
       window.location.href = url
-    } else {
-      setError('카카오 로그인을 사용하려면 백엔드에 카카오 로그인 시작 URL을 추가하거나, .env에 VITE_KAKAO_CLIENT_ID(카카오 REST API 키)를 설정해주세요.')
+    } catch (err) {
+      setError(err.message || '카카오 로그인 준비 중 오류가 발생했습니다.')
+    } finally {
+      setIsKakaoAuthenticating(false)
     }
   }
 
@@ -363,15 +344,22 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
     setActiveStep(0) // Step 1로 이동 (기본 정보는 이미 채워짐)
   }
 
-  // 로그인용 카카오 OAuth (같은 URL → 콜백에서 기존 회원이면 로그인 처리)
+  // 로그인용 카카오 OAuth (동일 prompt-login 사용, prompt=login)
   const handleKakaoLogin = () => {
     setError('')
-    const url = getKakaoAuthUrl()
-    if (url) {
-      window.location.href = url
-    } else {
-      setError('카카오 로그인을 사용하려면 백엔드에 카카오 로그인 시작 URL을 추가하거나, .env에 VITE_KAKAO_CLIENT_ID(카카오 REST API 키)를 설정해주세요.')
-    }
+    setIsKakaoAuthenticating(true)
+    kakaoPromptLogin('login')
+      .then((res) => {
+        const url = res?.data?.url ?? res?.url
+        if (!url) throw new Error('카카오 로그인 URL을 받지 못했습니다.')
+        window.location.href = url
+      })
+      .catch((err) => {
+        setError(err.message || '카카오 로그인 준비 중 오류가 발생했습니다.')
+      })
+      .finally(() => {
+        setIsKakaoAuthenticating(false)
+      })
   }
 
   // 이메일 인증 선택

@@ -157,6 +157,27 @@ export async function refreshToken(payload) {
   }
 }
 
+/**
+ * OAuth 카카오 로그인/회원가입 시작 (prompt-login)
+ * 백엔드가 카카오 인증 URL을 생성해주면, 프론트는 해당 URL로만 리다이렉트합니다.
+ * 예: GET /api/auth/kakao/url?prompt=login → { data: { url: 'https://kauth.kakao.com/...' } }
+ */
+export async function kakaoPromptLogin(prompt = 'login') {
+  try {
+    const params = new URLSearchParams()
+    if (prompt) params.set('prompt', prompt)
+    const url = `${API_BASE}/auth/kakao/url?${params.toString()}`
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    return handleResponse(response)
+  } catch (error) {
+    console.error('[memberApi] kakaoPromptLogin error:', error)
+    throw wrapNetworkError(error)
+  }
+}
+
 /** OAuth 로그인 및 회원가입 (카카오 콜백) | POST /api/auth/kakao/callback */
 export async function kakaoCallback(payload) {
   try {
