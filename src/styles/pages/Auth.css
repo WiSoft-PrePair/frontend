@@ -296,6 +296,18 @@
   margin-top: 0;
 }
 
+.auth__email-verify .form-helper {
+  margin-bottom: var(--spacing-xs);
+}
+.auth__email-verify input.form-input {
+  margin-bottom: var(--spacing-sm);
+}
+.auth__email-verified {
+  color: var(--color-success-600, #0d9488);
+  font-weight: var(--font-weight-medium);
+  margin: 0;
+}
+
 .auth__header {
   text-align: center;
   margin-bottom: var(--spacing-md);
@@ -338,6 +350,16 @@
   padding: var(--spacing-md);
   background: var(--color-error-light);
   color: var(--color-error);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--spacing-lg);
+}
+
+/* Success (회원가입 완료 안내) */
+.auth__success {
+  padding: var(--spacing-md);
+  background: var(--color-success-light, rgba(34, 197, 94, 0.12));
+  color: var(--color-success, #16a34a);
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   margin-bottom: var(--spacing-lg);
@@ -450,6 +472,47 @@
   color: var(--color-success);
 }
 
+/* Email + Verification inline layout */
+.auth__email-group {
+  margin-bottom: var(--spacing-lg);
+}
+
+.auth__email-row {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: stretch;
+}
+
+.auth__email-row .form-input {
+  flex: 1;
+}
+
+.auth__email-verify-btn {
+  white-space: nowrap;
+  padding-inline: var(--spacing-md);
+}
+
+.auth__email-verify-inline {
+  margin-top: var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.auth__email-code-row {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.auth__email-code-row .form-input {
+  flex: 1;
+}
+
+.auth__email-code-btn {
+  white-space: nowrap;
+}
+
 /* Job Suggestions */
 .auth__job-suggestions {
   display: flex;
@@ -500,11 +563,20 @@
   margin-top: 0;
 }
 
-/* 아이디 찾기 | 비밀번호 찾기 */
-.auth__forgot-password {
-  text-align: center;
+/* 이메일 찾기 | 비밀번호 찾기 링크 */
+.auth__find-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
   margin-top: var(--spacing-md);
   margin-bottom: 0;
+}
+
+.auth__find-links-divider {
+  color: var(--color-dark-300);
+  font-size: var(--font-size-sm);
+  user-select: none;
 }
 
 .auth__forgot-link {
@@ -541,6 +613,43 @@
   max-width: 400px;
 }
 
+.auth__modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-md);
+  gap: var(--spacing-sm);
+}
+
+.auth__modal-header h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-dark-800);
+}
+
+.auth__modal-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--color-dark-400);
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.auth__modal-close:hover {
+  color: var(--color-dark-700);
+  background: var(--color-dark-100);
+}
+
 .auth__modal h3 {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-bold);
@@ -548,10 +657,59 @@
   margin-bottom: var(--spacing-sm);
 }
 
-.auth__modal > p {
+.auth__modal > p,
+.auth__modal-desc {
   font-size: var(--font-size-sm);
   color: var(--color-dark-500);
   margin-bottom: var(--spacing-lg);
+  line-height: var(--line-height-relaxed);
+}
+
+.auth__modal-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-sm) 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-dark-400);
+}
+
+.auth__modal-step-line {
+  width: 12px;
+  height: 1px;
+  background: var(--color-dark-200);
+}
+
+.auth__modal-step--active {
+  color: var(--color-blue-600);
+  font-weight: var(--font-weight-medium);
+}
+
+.auth__modal-error-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  background: var(--color-error-light);
+  color: var(--color-error);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+.auth__modal-icon {
+  font-size: 2rem;
+  display: block;
+  margin-bottom: var(--spacing-sm);
+}
+
+.auth__modal-icon--success {
+  color: var(--color-success, #16a34a);
+}
+
+.auth__modal-icon--error {
+  color: var(--color-error);
 }
 
 .auth__modal .form-group {
@@ -568,9 +726,8 @@
   text-align: center;
 }
 
-.auth__modal-success span {
+.auth__modal-success .auth__modal-icon {
   font-size: 48px;
-  display: block;
   margin-bottom: var(--spacing-md);
 }
 
@@ -644,11 +801,10 @@
   text-align: center;
 }
 
-.auth__modal-error span {
+.auth__modal-error .auth__modal-icon {
   font-size: 48px;
   display: block;
   margin-bottom: var(--spacing-md);
-  color: var(--color-error);
 }
 
 .auth__modal-error p {

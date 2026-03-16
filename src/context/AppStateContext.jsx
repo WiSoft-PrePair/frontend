@@ -9,13 +9,15 @@ import {
   getMockActivity,
   mockPurchases,
   PRO_PLANS,
-  mockUserDB,
 } from '../data/mockDataForDemo'
+import * as memberApi from '../utils/memberApi'
 
 const AppStateContext = createContext(null)
 
 // 로컬 스토리지 키
 const STORAGE_KEY = 'prepair_user'
+const STORAGE_ACCESS_TOKEN_KEY = 'prepair_access_token'
+const STORAGE_REFRESH_TOKEN_KEY = 'prepair_refresh_token'
 const STORAGE_HISTORY_KEY = 'prepair_history'
 const STORAGE_COMPANY_HISTORY_KEY = 'prepair_company_history'
 const STORAGE_ACTIVITY_KEY = 'prepair_activity'
@@ -109,6 +111,50 @@ export function AppProvider({children}) {
     }
   }, [user])
 
+  // API 응답 user를 앱 user 형태로 정규화
+  // - 로그인/회원가입: data.member_info 또는 data.user
+  // - member_info 필드: point, isPro, memberId 등
+  const normalizeUser = useCallback((apiUser) => {
+    if (!apiUser) return null
+
+    // 백엔드 notification(email | kakao | BOTH) → FE boolean 플래그로 변환
+    const rawNotification =
+      apiUser.notification ??
+      apiUser.notificationKakao ??
+      apiUser.notification_kakao
+    const notificationKakao =
+      rawNotification === 'kakao' || rawNotification === 'BOTH'
+
+    // 백엔드 frequency(weekly | every) → 기존 cadence 필드에 매핑
+    const rawFrequency =
+      apiUser.frequency ??
+      apiUser.cadence ??
+      apiUser.cadenceId
+    const cadence = rawFrequency || 'daily'
+
+    // plan: BE가 isPro(boolean) 또는 plan('free'|'pro')로 내려줌
+    const plan =
+      apiUser.plan ??
+      (apiUser.isPro === true ? 'pro' : apiUser.isPro === false ? 'free' : 'free')
+
+    return {
+      id:
+        apiUser.id ??
+        apiUser.userId ??
+        apiUser.memberId ??
+        `user-${apiUser.email?.replace('@', '-')}`,
+      nickname: apiUser.nickname ?? apiUser.name ?? '',
+      name: apiUser.nickname ?? apiUser.name ?? '',
+      email: apiUser.email ?? '',
+      points: apiUser.points ?? apiUser.point ?? 0,
+      streak: apiUser.streak ?? 0,
+      jobRole: apiUser.job ?? apiUser.jobRole ?? apiUser.job_role ?? '',
+      cadence,
+      notificationKakao,
+      plan,
+    }
+  }, [])
+
   // 히스토리 저장
   useEffect(() => {
     localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(scoreHistory))
@@ -134,87 +180,134 @@ export function AppProvider({children}) {
     localStorage.setItem(STORAGE_PRO_USAGE_KEY, JSON.stringify(proUsage))
   }, [proUsage])
 
-  // Mock 로그인 (이메일 형식 검증 없음)
-  const login = useCallback(async ({email, password}) => {
-    // 약간의 딜레이로 실제 API 호출처럼 보이게
-    await new Promise(resolve => setTimeout(resolve, 300))
+  // 로그인 (memberApi 연동)
+  const login = useCallback(async ({ email, password }) => {
+    const response = await memberApi.login({ email, password })
+    // BE: data.member_info 또는 data.user 또는 data
+    const apiUser =
+      response.data?.member_info ??
+      response.data?.user ??
+      response.data ??
+      response.user ??
+      response
+    const accessToken = response.data?.accessToken ?? response.accessToken
+    const refreshToken = response.data?.refreshToken ?? response.refreshToken
 
-    // Mock DB에서 사용자 찾기 (이메일 앞부분을 ID로 사용)
-    const userId = email.split('@')[0] || email
-    const mockUser = mockUserDB[userId]
-
-    if (mockUser && mockUser.password === password) {
-      const userData = {
-        id: `user-${userId}`,
-        name: mockUser.name,
-        email: email,
-        points: mockUser.points,
-        streak: mockUser.streak,
-        jobRole: mockUser.jobRole,
-        cadence: 'daily',
-        notificationKakao: false,
-      }
-      setUser(userData)
-      return userData
-    }
-
-    // Mock DB에 없으면 아무 입력이나 통과 (테스트 편의)
-    const userData = {
-      id: `user-${Date.now()}`,
-      name: userId || '사용자',
-      email: email || 'user@test.com',
-      points: 1000,
-      streak: 5,
-      jobRole: '프론트엔드 개발자',
-      cadence: 'daily',
-      notificationKakao: false,
-    }
+    const userData = normalizeUser(apiUser)
     setUser(userData)
+    if (accessToken) {
+      localStorage.setItem(STORAGE_ACCESS_TOKEN_KEY, accessToken)
+    }
+    if (refreshToken) {
+      localStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, refreshToken)
+    }
     return userData
-  }, [])
+  }, [normalizeUser])
 
-  // Mock 회원가입 (이메일 형식 검증 없음)
+  // 회원가입 (memberApi.registerMember 연동, 이메일 인증 완료 후 호출)
   const signup = useCallback(async (formData) => {
-    // 약간의 딜레이
-    await new Promise(resolve => setTimeout(resolve, 500))
+    // cadence(id: 'daily' | 'weekly') → frequency('every' | 'weekly') 매핑
+    const cadenceId = formData.cadence?.id ?? formData.cadence
+    const frequency = cadenceId === 'weekly' ? 'weekly' : 'every'
 
-    const userData = {
-      id: `user-${Date.now()}`,
-      name: formData.name || '새사용자',
-      email: formData.email || 'new@test.com',
-      points: 500, // 신규 가입 보너스
-      streak: 0,
-      jobRole: formData.jobRole || formData.jobCategoryOther || '미정',
-      cadence: formData.cadence?.id || 'daily',
-      notificationKakao: formData.notificationKakao || false,
+    // 알림 채널(email | kakao | BOTH)
+    // - 이메일 회원가입: 기본 email, 카카오 알림 선택 시 BOTH
+    // - 카카오 회원가입: 카카오만 선택 시 kakao, 둘 다면 BOTH (formData.notificationKakao 기준)
+    let notification = 'email'
+    if (formData.authMethod === 'kakao') {
+      notification = formData.notificationKakao ? 'BOTH' : 'kakao'
+    } else {
+      notification = formData.notificationKakao ? 'BOTH' : 'email'
     }
 
+    const payload = {
+      email: formData.email?.trim(),
+      password: formData.password,
+      job: formData.jobRole,
+      nickname: formData.name,
+      notification,
+      frequency,
+    }
+    const response = await memberApi.registerMember(payload)
+    // 회원가입 성공 후 자동 로그인하지 않음 → 로그인 화면으로 보내기 위해 user/토큰 저장 생략
+    return { success: true, response }
+  }, [])
+
+  // 로그인/회원가입 API 응답으로 사용자 상태 설정 (Auth 페이지에서 사용)
+  const setUserFromAuthResponse = useCallback((response) => {
+    const apiUser =
+      response?.data?.member_info ??
+      response?.data?.user ??
+      response?.data ??
+      response?.user ??
+      response
+    const accessToken = response?.data?.accessToken ?? response?.accessToken
+    const refreshToken = response?.data?.refreshToken ?? response?.refreshToken
+
+    const userData = normalizeUser(apiUser)
     setUser(userData)
-    return {userId: userData.id}
+    if (accessToken) {
+      localStorage.setItem(STORAGE_ACCESS_TOKEN_KEY, accessToken)
+    }
+    if (refreshToken) {
+      localStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, refreshToken)
+    }
+  }, [normalizeUser])
+
+  // 로그아웃 (백엔드 API + 로컬 상태 정리)
+  const logout = useCallback(async () => {
+    setIsLoggingOut(true)
+    const accessToken = localStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
+    const refreshToken = localStorage.getItem(STORAGE_REFRESH_TOKEN_KEY)
+
+    try {
+      if (accessToken || refreshToken) {
+        await memberApi.logout({ accessToken, refreshToken })
+      } else {
+        await memberApi.logout()
+      }
+    } catch (error) {
+      console.error('[AppStateContext] logout api error:', error)
+      // 네트워크/서버 오류가 있어도 클라이언트에서는 일단 로그아웃 진행
+    } finally {
+      setUser(null)
+      setCurrentQuestion(null)
+      setLastFeedback(null)
+      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
+      localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
+      setIsLoggingOut(false)
+    }
   }, [])
 
-  // 로그아웃
-  const logout = useCallback(() => {
+  // 회원 탈퇴 (백엔드 API + 로컬 상태/히스토리 정리)
+  const deleteAccount = useCallback(async () => {
     setIsLoggingOut(true)
-    setUser(null)
-    setCurrentQuestion(null)
-    setLastFeedback(null)
-    localStorage.removeItem(STORAGE_KEY)
-  }, [])
+    const accessToken = localStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
 
-  // 회원 탈퇴
-  const deleteAccount = useCallback(() => {
-    setIsLoggingOut(true)
-    setUser(null)
-    setCurrentQuestion(null)
-    setLastFeedback(null)
-    setScoreHistory([])
-    setActivity(getMockActivity())
-    setPurchases([])
-    localStorage.removeItem(STORAGE_KEY)
-    localStorage.removeItem(STORAGE_HISTORY_KEY)
-    localStorage.removeItem(STORAGE_ACTIVITY_KEY)
-    localStorage.removeItem(STORAGE_PURCHASES_KEY)
+    try {
+      if (accessToken) {
+        await memberApi.deleteMember(accessToken)
+      }
+    } catch (error) {
+      console.error('[AppStateContext] deleteAccount api error:', error)
+      // 탈퇴 API 실패 시에는 계정/데이터를 그대로 두는 것이 안전하지만
+      // 현재 UX 요구사항에 맞춰 클라이언트 데이터는 정리한다.
+    } finally {
+      setUser(null)
+      setCurrentQuestion(null)
+      setLastFeedback(null)
+      setScoreHistory([])
+      setActivity(getMockActivity())
+      setPurchases([])
+      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
+      localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
+      localStorage.removeItem(STORAGE_HISTORY_KEY)
+      localStorage.removeItem(STORAGE_ACTIVITY_KEY)
+      localStorage.removeItem(STORAGE_PURCHASES_KEY)
+      setIsLoggingOut(false)
+    }
   }, [])
 
   // 프로필 업데이트
@@ -455,6 +548,10 @@ export function AppProvider({children}) {
     return { success: true }
   }, [])
 
+  const getAccessToken = useCallback(() => {
+    return localStorage.getItem(STORAGE_ACCESS_TOKEN_KEY) || null
+  }, [])
+
   const value = {
     // State
     user,
@@ -478,6 +575,8 @@ export function AppProvider({children}) {
     // Actions
     login,
     signup,
+    setUserFromAuthResponse,
+    getAccessToken,
     logout,
     deleteAccount,
     updateProfile,

@@ -1,16 +1,37 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion as Motion } from 'framer-motion'
 import { useAppState } from '../context/AppStateContext'
 import Dropdown from '../components/Dropdown'
 import ProUpgradeModal from '../components/ProUpgradeModal'
 import '../styles/pages/Settings.css'
 import '../styles/components/pro-upgrade.css'
+import {
+  getMe,
+  updateMember,
+  updatePassword,
+  requestEmailChangeVerification,
+  verifyEmailChange,
+  updateEmail,
+} from '../utils/memberApi'
 
 export default function SettingsPage() {
-  const { user, updateProfile, cadencePresets, deleteAccount, isPro, PRO_PLANS, proUsage, canUseMockInterview, canUseJobPost, upgradeToPro } = useAppState()
+  const {
+    user,
+    updateProfile,
+    cadencePresets,
+    deleteAccount,
+    isPro,
+    PRO_PLANS,
+    canUseMockInterview,
+    canUseJobPost,
+    upgradeToPro,
+    getAccessToken,
+    setUserFromAuthResponse,
+  } = useAppState()
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showProModal, setShowProModal] = useState(false)
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false)
 
   const handleDeleteAccount = () => {
     if (showDeleteConfirm) {
@@ -31,24 +52,305 @@ export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
+  // 이메일 변경 상태
+  const [emailChange, setEmailChange] = useState({
+    email: '',
+    code: '',
+    sent: false,
+    isSending: false,
+    isVerifying: false,
+    successMessage: '',
+    errorMessage: '',
+  })
+
+  // 비밀번호 변경 상태
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    newPasswordConfirm: '',
+  })
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false)
+  const [passwordMessage, setPasswordMessage] = useState({ type: '', text: '' })
+
+  // Settings 진입 시 서버의 최신 회원 정보를 한 번 동기화
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        setIsLoadingProfile(true)
+        const accessToken = getAccessToken?.()
+        const me = await getMe(accessToken)
+        // BE 래퍼: { statusCode, data, message } 형태를 가정
+        // AppStateContext의 정규화 로직을 그대로 사용해 user 상태를 갱신
+        setUserFromAuthResponse(me)
+      } catch (error) {
+        console.error('[Settings] getMe error:', error)
+      } finally {
+        setIsLoadingProfile(false)
+      }
+    }
+
+    // 로그인 후라면 user가 이미 있을 수 있지만,
+    // 새로고침 등으로 초기화된 경우를 대비해 한 번 호출
+    if (!user) {
+      fetchProfile()
+    }
+  }, [user, getAccessToken, setUserFromAuthResponse])
+
+  // user 상태가 바뀌면 폼에 회원 정보 반영
+  useEffect(() => {
+    if (!user) return
+    setForm((prev) => ({
+      ...prev,
+      name: user.name || '',
+      email: user.email || '',
+      jobRole: user.jobRole || '',
+      cadence: user.cadence || 'daily',
+      notificationKakao: user.notificationKakao || false,
+    }))
+
+    // 프로필 동기화 시 기본 이메일도 갱신
+    setEmailChange((prev) => ({
+      ...prev,
+      email: '',
+      code: '',
+      sent: false,
+      successMessage: '',
+      errorMessage: '',
+    }))
+  }, [user])
+
   const handleSave = async () => {
     setIsSaving(true)
     setSaved(false)
 
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      updateProfile({
-        name: form.name,
-        email: form.email,
-        jobRole: form.jobRole,
-        cadence: form.cadence,
-        notificationKakao: form.notificationKakao,
-      })
+      const accessToken = getAccessToken?.()
+
+      if (!accessToken) {
+        console.warn('[Settings] accessToken is missing. 회원정보 수정 API를 호출할 수 없습니다.')
+      } else {
+        // cadence(id: 'daily' | 'weekly') → frequency('every' | 'weekly') 매핑
+        const cadenceId = form.cadence?.id ?? form.cadence
+        const frequency = cadenceId === 'weekly' ? 'weekly' : 'every'
+
+        // 알림 채널(email | kakao | BOTH)
+        let notification = 'email'
+        const emailOn = form.notificationEmail
+        const kakaoOn = form.notificationKakao
+        if (emailOn && kakaoOn) notification = 'BOTH'
+        else if (!emailOn && kakaoOn) notification = 'kakao'
+        else if (emailOn && !kakaoOn) notification = 'email'
+
+        const payload = {
+          nickname: form.name,
+          job: form.jobRole,
+          notification,
+          frequency,
+        }
+
+        const updated = await updateMember(accessToken, payload)
+
+        // 백엔드 응답을 AppStateContext 정규화 로직을 통해 반영
+        setUserFromAuthResponse({ user: updated })
+
+        // 로컬 폼 상태도 동기화
+        updateProfile({
+          name: updated.nickname ?? form.name,
+          email: updated.email ?? form.email,
+          jobRole: updated.job ?? form.jobRole,
+          cadence: form.cadence,
+          notificationKakao: updated.notificationKakao ?? form.notificationKakao,
+        })
+      }
+
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  const handleSendEmailChangeCode = async () => {
+    const trimmedEmail = emailChange.email.trim()
+    if (!trimmedEmail) {
+      setEmailChange((prev) => ({
+        ...prev,
+        errorMessage: '변경할 이메일을 입력해주세요.',
+        successMessage: '',
+      }))
+      return
+    }
+
+    const accessToken = getAccessToken?.()
+    if (!accessToken) {
+      setEmailChange((prev) => ({
+        ...prev,
+        errorMessage: '로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.',
+        successMessage: '',
+      }))
+      return
+    }
+
+    setEmailChange((prev) => ({
+      ...prev,
+      isSending: true,
+      errorMessage: '',
+      successMessage: '',
+    }))
+
+    try {
+      await requestEmailChangeVerification(accessToken, {
+        email: trimmedEmail,
+        purpose: 'CHANGE_EMAIL',
+      })
+      setEmailChange((prev) => ({
+        ...prev,
+        sent: true,
+        successMessage: '인증 메일을 전송했습니다. 받은 편지함을 확인해주세요.',
+      }))
+    } catch (error) {
+      setEmailChange((prev) => ({
+        ...prev,
+        errorMessage: error.message || '인증 메일 전송에 실패했습니다.',
+        successMessage: '',
+      }))
+    } finally {
+      setEmailChange((prev) => ({
+        ...prev,
+        isSending: false,
+      }))
+    }
+  }
+
+  const handleConfirmEmailChange = async () => {
+    const trimmedEmail = emailChange.email.trim()
+    const trimmedCode = emailChange.code.trim()
+
+    if (!trimmedEmail || !trimmedCode) {
+      setEmailChange((prev) => ({
+        ...prev,
+        errorMessage: '이메일과 인증 코드를 모두 입력해주세요.',
+        successMessage: '',
+      }))
+      return
+    }
+
+    const accessToken = getAccessToken?.()
+    if (!accessToken) {
+      setEmailChange((prev) => ({
+        ...prev,
+        errorMessage: '로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.',
+        successMessage: '',
+      }))
+      return
+    }
+
+    setEmailChange((prev) => ({
+      ...prev,
+      isVerifying: true,
+      errorMessage: '',
+      successMessage: '',
+    }))
+
+    try {
+      // 1) 코드 검증
+      await verifyEmailChange(accessToken, {
+        email: trimmedEmail,
+        code: trimmedCode,
+        purpose: 'CHANGE_EMAIL',
+      })
+
+      // 2) 이메일 실제 변경
+      await updateEmail(accessToken, {
+        newEmail: trimmedEmail,
+      })
+
+      setForm((prev) => ({
+        ...prev,
+        email: trimmedEmail,
+      }))
+
+      updateProfile({
+        email: trimmedEmail,
+      })
+
+      setEmailChange({
+        email: '',
+        code: '',
+        sent: false,
+        isSending: false,
+        isVerifying: false,
+        successMessage: '이메일이 성공적으로 변경되었습니다.',
+        errorMessage: '',
+      })
+    } catch (error) {
+      setEmailChange((prev) => ({
+        ...prev,
+        errorMessage: error.message || '이메일 변경에 실패했습니다.',
+        successMessage: '',
+      }))
+    } finally {
+      setEmailChange((prev) => ({
+        ...prev,
+        isVerifying: false,
+      }))
+    }
+  }
+
+  const handleChangePassword = async () => {
+    const { currentPassword, newPassword, newPasswordConfirm } = passwordForm
+
+    if (!currentPassword || !newPassword || !newPasswordConfirm) {
+      setPasswordMessage({ type: 'error', text: '모든 비밀번호 항목을 입력해주세요.' })
+      return
+    }
+    if (newPassword.length < 6) {
+      setPasswordMessage({ type: 'error', text: '새 비밀번호는 6자 이상이어야 합니다.' })
+      return
+    }
+    if (!/[^A-Za-z0-9]/.test(newPassword)) {
+      setPasswordMessage({ type: 'error', text: '새 비밀번호에 특수문자를 포함해주세요.' })
+      return
+    }
+    if (newPassword !== newPasswordConfirm) {
+      setPasswordMessage({ type: 'error', text: '새 비밀번호가 서로 일치하지 않습니다.' })
+      return
+    }
+
+    const accessToken = getAccessToken?.()
+    if (!accessToken) {
+      setPasswordMessage({
+        type: 'error',
+        text: '로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.',
+      })
+      return
+    }
+
+    setIsUpdatingPassword(true)
+    setPasswordMessage({ type: '', text: '' })
+
+    try {
+      await updatePassword(accessToken, {
+        currentPassword,
+        newPassword,
+      })
+
+      setPasswordForm({
+        currentPassword: '',
+        newPassword: '',
+        newPasswordConfirm: '',
+      })
+      setPasswordMessage({
+        type: 'success',
+        text: '비밀번호가 성공적으로 변경되었습니다.',
+      })
+    } catch (error) {
+      setPasswordMessage({
+        type: 'error',
+        text: error.message || '비밀번호 변경에 실패했습니다.',
+      })
+    } finally {
+      setIsUpdatingPassword(false)
     }
   }
 
@@ -58,6 +360,9 @@ export default function SettingsPage() {
         <header className="settings__header">
           <h1>설정</h1>
           <p>계정 정보와 알림 설정을 관리하세요</p>
+          {isLoadingProfile && (
+            <p className="settings__header-subtext">회원 정보를 불러오는 중입니다...</p>
+          )}
         </header>
 
         <div className="settings__grid">
@@ -82,9 +387,12 @@ export default function SettingsPage() {
                   type="email"
                   className="form-input"
                   value={form.email}
-                  onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+                  disabled
                   placeholder="example@email.com"
                 />
+                <p className="form-helper">
+                  이메일 변경은 아래 <strong>이메일 변경</strong> 섹션에서 진행할 수 있습니다.
+                </p>
               </div>
 
               <div className="form-group">
@@ -152,6 +460,171 @@ export default function SettingsPage() {
                     </div>
                   </label>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Security Section */}
+          <section className="settings__section card">
+            <h2 className="settings__section-title">보안 설정</h2>
+
+            <div className="settings__form settings__form--security">
+              {/* Email Change */}
+              <div className="settings__security-block">
+                <h3 className="settings__security-title">이메일 변경</h3>
+                <p className="settings__security-description">
+                  현재 이메일: <strong>{user?.email || '등록된 이메일 없음'}</strong>
+                </p>
+
+                <div className="form-group">
+                  <label className="form-label">새 이메일</label>
+                  <div className="settings__field-row">
+                    <input
+                      type="email"
+                      className="form-input"
+                      placeholder="새로운 이메일 주소를 입력하세요"
+                      value={emailChange.email}
+                      onChange={(e) =>
+                        setEmailChange((prev) => ({
+                          ...prev,
+                          email: e.target.value,
+                        }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--secondary settings__inline-btn"
+                      onClick={handleSendEmailChangeCode}
+                      disabled={emailChange.isSending || !emailChange.email.trim()}
+                    >
+                      {emailChange.isSending
+                        ? '전송 중...'
+                        : emailChange.sent
+                        ? '재전송'
+                        : '인증 메일 보내기'}
+                    </button>
+                  </div>
+                  <p className="form-helper">
+                    회원가입 때와 동일하게 이메일로 인증 코드를 보내드려요.
+                  </p>
+                </div>
+
+                {emailChange.sent && (
+                  <div className="form-group">
+                    <label className="form-label">인증 코드</label>
+                    <div className="settings__field-row">
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="이메일로 받은 인증 코드 입력"
+                        value={emailChange.code}
+                        onChange={(e) =>
+                          setEmailChange((prev) => ({
+                            ...prev,
+                            code: e.target.value.replace(/\s/g, ''),
+                          }))
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="btn btn--primary settings__inline-btn"
+                        onClick={handleConfirmEmailChange}
+                        disabled={emailChange.isVerifying || emailChange.code.trim().length === 0}
+                      >
+                        {emailChange.isVerifying ? '변경 중...' : '인증 후 변경'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {(emailChange.errorMessage || emailChange.successMessage) && (
+                  <p
+                    className={`settings__status ${
+                      emailChange.errorMessage ? 'settings__status--error' : 'settings__status--success'
+                    }`}
+                  >
+                    {emailChange.errorMessage || emailChange.successMessage}
+                  </p>
+                )}
+              </div>
+
+              {/* Password Change */}
+              <div className="settings__security-block">
+                <h3 className="settings__security-title">비밀번호 변경</h3>
+                <p className="settings__security-description">
+                  현재 비밀번호를 확인한 후 새 비밀번호로 변경합니다.
+                </p>
+
+                <div className="settings__security-grid">
+                  <div className="form-group">
+                    <label className="form-label">현재 비밀번호</label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      value={passwordForm.currentPassword}
+                      onChange={(e) =>
+                        setPasswordForm((prev) => ({
+                          ...prev,
+                          currentPassword: e.target.value,
+                        }))
+                      }
+                      placeholder="현재 사용 중인 비밀번호"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">새 비밀번호</label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      value={passwordForm.newPassword}
+                      onChange={(e) =>
+                        setPasswordForm((prev) => ({
+                          ...prev,
+                          newPassword: e.target.value,
+                        }))
+                      }
+                      placeholder="6자 이상, 특수문자 포함"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">새 비밀번호 확인</label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      value={passwordForm.newPasswordConfirm}
+                      onChange={(e) =>
+                        setPasswordForm((prev) => ({
+                          ...prev,
+                          newPasswordConfirm: e.target.value,
+                        }))
+                      }
+                      placeholder="새 비밀번호 다시 입력"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn--secondary settings__password-btn"
+                  onClick={handleChangePassword}
+                  disabled={isUpdatingPassword}
+                >
+                  {isUpdatingPassword ? '변경 중...' : '비밀번호 변경'}
+                </button>
+
+                {passwordMessage.text && (
+                  <p
+                    className={`settings__status ${
+                      passwordMessage.type === 'error'
+                        ? 'settings__status--error'
+                        : 'settings__status--success'
+                    }`}
+                  >
+                    {passwordMessage.text}
+                  </p>
+                )}
               </div>
             </div>
           </section>

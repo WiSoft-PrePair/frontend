@@ -55,6 +55,67 @@
   gap: var(--spacing-lg);
 }
 
+.settings__form--security {
+  gap: var(--spacing-xl);
+}
+
+.settings__security-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.settings__security-title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-dark-800);
+  margin: 0;
+}
+
+.settings__security-description {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.settings__security-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-md);
+}
+
+.settings__field-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--spacing-sm);
+}
+
+.settings__field-row .form-input {
+  flex: 1;
+}
+
+.settings__inline-btn {
+  white-space: nowrap;
+}
+
+.settings__password-btn {
+  align-self: flex-start;
+  margin-top: var(--spacing-sm);
+}
+
+.settings__status {
+  font-size: var(--font-size-xs);
+  margin-top: var(--spacing-xs);
+}
+
+.settings__status--error {
+  color: var(--color-error);
+}
+
+.settings__status--success {
+  color: var(--color-success, #0d9488);
+}
+
 /* Notification Options */
 .settings__notification-options {
   display: flex;
@@ -460,6 +521,14 @@
 
   .settings__notification-option {
     padding: var(--spacing-sm);
+  }
+
+  .settings__security-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings__password-btn {
+    width: 100%;
   }
 
   /* Subscription Mobile */

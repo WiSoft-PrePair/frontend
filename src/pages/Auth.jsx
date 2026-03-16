@@ -6,7 +6,19 @@ import useMediaQuery from '../hooks/useMediaQuery'
 import Dropdown from '../components/Dropdown'
 import logo from '../assets/logo.png'
 import '../styles/pages/Auth.css'
-import { findIdByEmail, sendPasswordResetEmail, resetPassword } from '../utils/authApi'
+import {
+  getMemberByEmail,
+  requestSignupEmailVerification,
+  verifySignupEmail,
+  registerMember,
+  requestPasswordResetEmail,
+  resetPassword as resetPasswordApi,
+  kakaoCallback,
+  kakaoRegister,
+} from '../utils/memberApi'
+import { th } from 'framer-motion/client'
+
+const API_BASE = '/api'
 
 const steps = [
   { id: 'account', label: '기본 정보' },
@@ -19,7 +31,7 @@ export default function AuthPage() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
 
-  const { user, login, signup, jobTracks, cadencePresets } = useAppState()
+  const { user, login, signup, setUserFromAuthResponse, jobTracks, cadencePresets } = useAppState()
   const isMobile = useMediaQuery('(max-width: 768px)')
 
   useEffect(() => {
@@ -44,8 +56,10 @@ export default function AuthPage() {
   const [authMethod, setAuthMethod] = useState(null) // null | 'kakao' | 'email'
   const [isKakaoAuthenticating, setIsKakaoAuthenticating] = useState(false)
   const [showKakaoNotificationModal, setShowKakaoNotificationModal] = useState(false)
-  const [kakaoAuthData, setKakaoAuthData] = useState(null) // { name, email }
+  const [kakaoAuthData, setKakaoAuthData] = useState(null) // { name, email } (prefilledData)
+  const [registrationToken, setRegistrationToken] = useState(null) // 카카오 신규 회원 시 회원가입 완료용
   const [showEmailLogin, setShowEmailLogin] = useState(false) // 이메일 로그인 폼 표시 여부
+  const [signupSuccessMessage, setSignupSuccessMessage] = useState('') // 회원가입 완료 후 안내
 
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [signupForm, setSignupForm] = useState({
@@ -56,12 +70,20 @@ export default function AuthPage() {
     jobRole: '',
     cadence: defaultCadence,
     notificationKakao: false,
+    // AppStateContext.signup 에서 알림 채널 계산에 사용
+    authMethod: null, // 'kakao' | 'email'
   })
 
-const [showFindId, setShowFindId] = useState(false)
-const [findIdEmail, setFindIdEmail] = useState('')
-const [findIdResult, setFindIdResult] = useState(null) // null, 'found', 'notFound'
-const [isFindingId, setIsFindingId] = useState(false)
+  // 이메일 회원가입: 인증 단계 (요청 → 코드 입력 → 확인)
+  const [emailVerificationSent, setEmailVerificationSent] = useState(false)
+  const [emailVerificationCode, setEmailVerificationCode] = useState('')
+  const [emailVerified, setEmailVerified] = useState(false)
+  const [isVerifying, setIsVerifying] = useState(false)
+
+const [showFindEmail, setShowFindEmail] = useState(false)
+  const [findEmailInput, setFindEmailInput] = useState('')
+  const [findEmailResult, setFindEmailResult] = useState(null) // null | 'found' | 'notFound'
+  const [isFindingEmail, setIsFindingEmail] = useState(false)
 
 const [forgotPasswordStep, setForgotPasswordStep] = useState(1) // 1: 이메일, 2: 코드, 3: 새 비밀번호
 const [forgotCode, setForgotCode] = useState('')
@@ -77,15 +99,61 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
     }
   }, [searchParams])
 
+  // 카카오 OAuth 콜백: URL에 code가 있으면 callback API 호출 후 신규/기존 회원 분기
+  useEffect(() => {
+    const code = searchParams.get('code')
+    if (!code || !code.trim()) return
+
+    let cancelled = false
+    setIsKakaoAuthenticating(true)
+    setError('')
+
+    kakaoCallback({ code })
+      .then((response) => {
+        if (cancelled) return
+        const data = response?.data ?? response
+
+        if (data?.isNewMember === true) {
+          // 신규 가입자 → 회원가입 화면으로
+          const token = data.registrationToken
+          const prefilled = data.prefilledData ?? {}
+          setRegistrationToken(token)
+          setKakaoAuthData({
+            name: prefilled.nickname ?? '',
+            email: prefilled.email ?? '',
+          })
+          setMode('signup')
+          setAuthMethod('kakao')
+          setShowKakaoNotificationModal(true)
+          // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
+          navigate('/auth?mode=signup', { replace: true })
+        } else {
+          // 기존 회원 로그인
+          setUserFromAuthResponse(response)
+          navigate(redirectFrom || '/mypage', { replace: true })
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err.message || '카카오 로그인에 실패했습니다.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsKakaoAuthenticating(false)
+      })
+
+    return () => { cancelled = true }
+  }, [searchParams, navigate, redirectFrom, setUserFromAuthResponse, location.pathname])
+
   // Validation
   const loginValid = loginForm.email && loginForm.password
   const passwordValid = signupForm.password.length >= 6
   const passwordSpecialValid = /[^A-Za-z0-9]/.test(signupForm.password)
   const passwordMatch = signupForm.password === signupForm.passwordConfirm
-  // 카카오 인증 시 비밀번호는 선택사항으로 처리
-  const step1Valid = authMethod === 'kakao' 
-    ? signupForm.name && signupForm.email 
-    : signupForm.name && signupForm.email && passwordValid && passwordSpecialValid && passwordMatch
+  // 카카오 인증 시 비밀번호는 선택사항, 이메일 가입 시 인증 완료 필요
+  const step1Valid = authMethod === 'kakao'
+    ? signupForm.name && signupForm.email
+    : signupForm.name && signupForm.email && passwordValid && passwordSpecialValid && passwordMatch && emailVerified
   const step2Valid = signupForm.jobRole.trim().length > 0
   const step3Valid = signupForm.cadence !== null
 
@@ -106,78 +174,84 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
     }
   }
 
-  // 아이디 찾기
-const handleFindId = async () => {
-  if (!findIdEmail) return
-  
-  setIsFindingId(true)
-  setError('')
-  
-  try {
-    const result = await findIdByEmail(findIdEmail)
-    setFindIdResult(result.exists ? 'found' : 'notFound')
-  } catch (err) {
-    setError(err.message || '아이디 찾기에 실패했습니다.')
-    setFindIdResult(null)
-  } finally {
-    setIsFindingId(false)
+  // 이메일 찾기: 가입 여부 확인 (GET /api/members/?email=...)
+  const handleFindEmail = async () => {
+    if (!findEmailInput?.trim()) return
+    setIsFindingEmail(true)
+    setError('')
+    try {
+      await getMemberByEmail(findEmailInput.trim())
+      setFindEmailResult('found')
+    } catch (err) {
+      if (err.statusCode === 404 || err.message?.toLowerCase().includes('not found')) {
+        setFindEmailResult('notFound')
+      } else {
+        setError(err.message || '이메일 찾기에 실패했습니다.')
+        setFindEmailResult(null)
+      }
+    } finally {
+      setIsFindingEmail(false)
+    }
   }
-}
 
-// 비밀번호 찾기 1단계: 이메일 발송
-const handleSendPasswordResetEmail = async () => {
-  if (!forgotEmail) return
-  
-  setIsLoading(true)
-  setError('')
-  
-  try {
-    await sendPasswordResetEmail(forgotEmail)
-    setForgotPasswordStep(2) // 다음 단계로
-    setForgotEmailSent(true)
-  } catch (err) {
-    setError(err.message || '이메일 발송에 실패했습니다.')
-  } finally {
-    setIsLoading(false)
+  // 비밀번호 찾기 1단계: 이메일 발송 (memberApi)
+  const handleSendPasswordResetEmail = async () => {
+    if (!forgotEmail) return
+    setIsLoading(true)
+    setError('')
+    try {
+      await requestPasswordResetEmail({ email: forgotEmail })
+      setForgotPasswordStep(2)
+      setForgotEmailSent(true)
+    } catch (err) {
+      setError(err.message || '이메일 발송에 실패했습니다.')
+    } finally {
+      setIsLoading(false)
+    }
   }
-}
 
+  const handleVerifyCode = () => {
+    if (!forgotCode) return
+    setForgotPasswordStep(3)
+  }
 
-const handleVerifyCode = () => {
-  if (!forgotCode) return
-  setForgotPasswordStep(3)
-}
-
-const handleResetPassword = async () => {
-  if (!forgotNewPassword || !forgotPasswordConfirm) return
-  if (forgotNewPassword !== forgotPasswordConfirm) {
-    setError('비밀번호가 일치하지 않습니다.')
-    return
+  // 비밀번호 재설정 (memberApi)
+  const handleResetPassword = async () => {
+    if (!forgotNewPassword || !forgotPasswordConfirm) return
+    if (forgotNewPassword !== forgotPasswordConfirm) {
+      setError('비밀번호가 일치하지 않습니다.')
+      return
+    }
+    if (forgotNewPassword.length < 6) {
+      setError('비밀번호는 6자 이상이어야 합니다.')
+      return
+    }
+    if (!/[^A-Za-z0-9]/.test(forgotNewPassword)) {
+      setError('비밀번호에 특수문자를 포함해주세요.')
+      return
+    }
+    setIsLoading(true)
+    setError('')
+    try {
+      await resetPasswordApi({
+        email: forgotEmail,
+        code: forgotCode,
+        new_password: forgotNewPassword,
+      })
+      setShowForgotPassword(false)
+      setForgotPasswordStep(1)
+      setForgotEmail('')
+      setForgotCode('')
+      setForgotNewPassword('')
+      setForgotPasswordConfirm('')
+      setForgotEmailSent(false)
+      alert('비밀번호가 성공적으로 재설정되었습니다.')
+    } catch (err) {
+      setError(err.message || '비밀번호 재설정에 실패했습니다.')
+    } finally {
+      setIsLoading(false)
+    }
   }
-  if (forgotNewPassword.length < 6) {
-    setError('비밀번호는 6자 이상이어야 합니다.')
-    return
-  }
-  
-  setIsLoading(true)
-  setError('')
-  
-  try {
-    await resetPassword(forgotEmail, forgotCode, forgotNewPassword)
-    setShowForgotPassword(false)
-    setForgotPasswordStep(1)
-    setForgotEmail('')
-    setForgotCode('')
-    setForgotNewPassword('')
-    setForgotPasswordConfirm('')
-    setForgotEmailSent(false)
-    alert('비밀번호가 성공적으로 재설정되었습니다.')
-  } catch (err) {
-    setError(err.message || '비밀번호 재설정에 실패했습니다.')
-  } finally {
-    setIsLoading(false)
-  }
-}
 
   const handleSignup = async (e) => {
     e.preventDefault()
@@ -187,8 +261,30 @@ const handleResetPassword = async () => {
     setError('')
 
     try {
+      // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
+      if (authMethod === 'kakao' && registrationToken) {
+        const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
+        const notification = signupForm.notificationKakao ? 'BOTH' : 'kakao'
+        const response = await kakaoRegister({
+          registrationToken,
+          job: signupForm.jobRole?.trim() || 'OAuthJob',
+          notification,
+          frequency,
+        })
+        setUserFromAuthResponse(response)
+        setRegistrationToken(null)
+        navigate(redirectFrom || '/mypage', { replace: true })
+        return
+      }
+
       await signup(signupForm)
-      navigate('/mypage', { replace: true })
+      // 자동 로그인 없이 로그인 화면으로 전환 (이메일 회원가입)
+      setMode('login')
+      setShowEmailLogin(true)
+      setLoginForm((prev) => ({ ...prev, email: signupForm.email?.trim() || prev.email }))
+      setError('')
+      setTimeout(() => setSignupSuccessMessage('회원가입이 완료되었습니다. 로그인해주세요.'), 0)
+      setTimeout(() => setSignupSuccessMessage(''), 5000)
     } catch (err) {
       setError(err.message || '회원가입에 실패했습니다.')
     } finally {
@@ -206,27 +302,40 @@ const handleResetPassword = async () => {
     setActiveStep((prev) => Math.max(prev - 1, 0))
   }
 
-  // 카카오 인증 처리
-  const handleKakaoAuth = async () => {
-    setIsKakaoAuthenticating(true)
-    setError('')
+  // 카카오 OAuth 시작 URL (둘 중 하나 필요)
+  // - VITE_KAKAO_AUTH_URL: 백엔드가 제공하는 카카오 로그인 시작 주소 (REST API 키 불필요)
+  // - VITE_KAKAO_CLIENT_ID: 프론트에서 카카오 인증 페이지로 직접 이동 시 사용
+  const getKakaoAuthUrl = async() => {
+    try{
+      const repsonse = await fetch(`${API_BASE}/auth/kakao/url/?prompt=login`)
+      console.log(repsonse);
+      return handleResponse(response)
+    } catch (error) {
+        throw wrapNetworkError(error);
+    }
+    // const backendAuthUrl = import.meta.env.VITE_KAKAO_AUTH_URL
+    // const clientId = import.meta.env.VITE_KAKAO_CLIENT_ID
 
-    try {
-      // 모의 카카오 인증 처리 (실제로는 Kakao SDK 사용)
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      
-      // 모의 카카오 사용자 정보
-      const mockKakaoData = {
-        name: '홍길동', // 실제로는 카카오 API에서 받아옴
-        email: 'kakao@example.com', // 실제로는 카카오 API에서 받아옴
-      }
-      
-      setKakaoAuthData(mockKakaoData)
-      setIsKakaoAuthenticating(false)
-      setShowKakaoNotificationModal(true)
-    } catch (err) {
-      setError('카카오 인증에 실패했습니다.')
-      setIsKakaoAuthenticating(false)
+    // if (backendAuthUrl) return backendAuthUrl
+    // if (clientId) {
+    //   const redirectUri = import.meta.env.VITE_KAKAO_REDIRECT_URI || `${window.location.origin}/auth`
+    //   const params = new URLSearchParams({
+    //     client_id: clientId,
+    //     redirect_uri: redirectUri,
+    //     response_type: 'code',
+    //   })
+    //   return `https://kauth.kakao.com/oauth/authorize?${params.toString()}`
+    // }
+    // return null
+  }
+
+  const handleKakaoAuth = () => {
+    setError('')
+    const url = getKakaoAuthUrl()
+    if (url) {
+      window.location.href = url
+    } else {
+      setError('카카오 로그인을 사용하려면 백엔드에 카카오 로그인 시작 URL을 추가하거나, .env에 VITE_KAKAO_CLIENT_ID(카카오 REST API 키)를 설정해주세요.')
     }
   }
 
@@ -234,63 +343,93 @@ const handleResetPassword = async () => {
   const handleKakaoNotificationConfirm = (enableNotification) => {
     if (!kakaoAuthData) return
 
-    // 정보 자동 입력
+    // prefilledData 기반으로 회원가입 폼 자동 입력 (registrationToken은 이미 state에 있음)
     setSignupForm((prev) => ({
       ...prev,
       name: kakaoAuthData.name,
       email: kakaoAuthData.email,
-      password: 'kakao-auth-' + Date.now(), // 임시 비밀번호 (실제로는 서버에서 처리)
-      passwordConfirm: 'kakao-auth-' + Date.now(),
+      password: '',
+      passwordConfirm: '',
       notificationKakao: enableNotification,
+      authMethod: 'kakao',
     }))
 
-    // 로그인 폼에도 정보 저장 (나중에 로그인 시 사용)
-    localStorage.setItem('kakaoAuthEmail', kakaoAuthData.email)
+    if (kakaoAuthData.email) {
+      localStorage.setItem('kakaoAuthEmail', kakaoAuthData.email)
+    }
 
     setAuthMethod('kakao')
     setShowKakaoNotificationModal(false)
     setActiveStep(0) // Step 1로 이동 (기본 정보는 이미 채워짐)
   }
 
-  // 로그인용 카카오 인증
-  const handleKakaoLogin = async () => {
-    setIsKakaoAuthenticating(true)
+  // 로그인용 카카오 OAuth (같은 URL → 콜백에서 기존 회원이면 로그인 처리)
+  const handleKakaoLogin = () => {
     setError('')
-
-    try {
-      // 모의 카카오 인증 처리
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      
-      // 저장된 카카오 이메일이 있으면 사용, 없으면 모의 데이터
-      const savedEmail = localStorage.getItem('kakaoAuthEmail')
-      const mockKakaoData = {
-        email: savedEmail || 'kakao@example.com',
-      }
-      
-      // 로그인 폼에 자동 입력
-      setLoginForm({
-        email: mockKakaoData.email,
-        password: '', // 카카오 로그인은 비밀번호 불필요 (실제로는 서버에서 처리)
-      })
-
-      // 카카오 로그인은 바로 로그인 처리 (실제로는 서버 API 호출)
-      setIsKakaoAuthenticating(false)
-      
-      // 모의 로그인 처리
-      setIsLoading(true)
-      await login({ email: mockKakaoData.email, password: 'kakao-login' })
-      navigate(redirectFrom || '/mypage', { replace: true })
-    } catch (err) {
-      setError('카카오 로그인에 실패했습니다.')
-      setIsKakaoAuthenticating(false)
-      setIsLoading(false)
+    const url = getKakaoAuthUrl()
+    if (url) {
+      window.location.href = url
+    } else {
+      setError('카카오 로그인을 사용하려면 백엔드에 카카오 로그인 시작 URL을 추가하거나, .env에 VITE_KAKAO_CLIENT_ID(카카오 REST API 키)를 설정해주세요.')
     }
   }
 
   // 이메일 인증 선택
   const handleEmailAuth = () => {
+    setRegistrationToken(null)
+    setKakaoAuthData(null)
     setAuthMethod('email')
+    setSignupForm((prev) => ({
+      ...prev,
+      authMethod: 'email',
+    }))
     setActiveStep(0)
+    setEmailVerificationSent(false)
+    setEmailVerificationCode('')
+    setEmailVerified(false)
+  }
+
+  // 회원가입 이메일 인증 요청
+  const handleRequestEmailVerification = async () => {
+    if (!signupForm.email?.trim()) {
+      setError('이메일을 입력해주세요.')
+      return
+    }
+    setIsVerifying(true)
+    setError('')
+    try {
+      // 회원가입 이메일 인증 요청 시 BE 스펙에 맞춰 purpose 포함
+      await requestSignupEmailVerification({
+        email: signupForm.email.trim(),
+        purpose: 'REGISTER',
+      })
+      setEmailVerificationSent(true)
+    } catch (err) {
+      setError(err.message || '인증 메일 발송에 실패했습니다.')
+    } finally {
+      setIsVerifying(false)
+    }
+  }
+
+  // 회원가입 이메일 인증 확인
+  const handleVerifyEmailCode = async () => {
+    if (!emailVerificationCode?.trim()) {
+      setError('인증 코드를 입력해주세요.')
+      return
+    }
+    setIsVerifying(true)
+    setError('')
+    try {
+      await verifySignupEmail({
+        email: signupForm.email.trim(),
+        code: emailVerificationCode.trim(),
+      })
+      setEmailVerified(true)
+    } catch (err) {
+      setError(err.message || '인증에 실패했습니다. 코드를 확인해주세요.')
+    } finally {
+      setIsVerifying(false)
+    }
   }
 
   return (
@@ -457,21 +596,63 @@ const handleResetPassword = async () => {
                       value={signupForm.name}
                       onChange={(e) => setSignupForm((p) => ({ ...p, name: e.target.value }))}
                       required
-                      disabled={authMethod === 'kakao'}
                     />
                   </div>
 
-                  <div className="form-group">
+                  <div className="form-group auth__email-group">
                     <label className="form-label">이메일</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="test 또는 test@example.com"
-                      value={signupForm.email}
-                      onChange={(e) => setSignupForm((p) => ({ ...p, email: e.target.value }))}
-                      disabled={authMethod === 'kakao'}
-                    />
-                  
+                    <div className="auth__email-row">
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="test 또는 test@example.com"
+                        value={signupForm.email}
+                        onChange={(e) => setSignupForm((p) => ({ ...p, email: e.target.value }))}
+                      />
+                      {authMethod === 'email' && (
+                        <button
+                          type="button"
+                          className="btn btn--secondary auth__email-verify-btn"
+                          onClick={handleRequestEmailVerification}
+                          disabled={isVerifying || !signupForm.email?.trim()}
+                        >
+                          {isVerifying
+                            ? '발송 중...'
+                            : emailVerificationSent
+                            ? '재전송'
+                            : '인증 메일 받기'}
+                        </button>
+                      )}
+                    </div>
+                    {authMethod === 'email' && emailVerificationSent && !emailVerified && (
+                      <div className="auth__email-verify-inline">
+                        <p className="form-helper">이메일로 전송된 인증 코드를 입력해주세요.</p>
+                        <div className="auth__email-code-row">
+                          <input
+                            type="text"
+                            className="form-input"
+                            placeholder="인증 코드 6자리"
+                            value={emailVerificationCode}
+                            onChange={(e) =>
+                              setEmailVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))
+                            }
+                            maxLength={6}
+                            autoComplete="one-time-code"
+                          />
+                          <button
+                            type="button"
+                            className="btn btn--primary auth__email-code-btn"
+                            onClick={handleVerifyEmailCode}
+                            disabled={isVerifying || emailVerificationCode.length < 4}
+                          >
+                            {isVerifying ? '확인 중...' : '인증 확인'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {authMethod === 'email' && emailVerified && (
+                      <p className="auth__email-verified">✓ 이메일 인증이 완료되었습니다.</p>
+                    )}
                   </div>
 
                   {authMethod === 'email' && (
@@ -506,6 +687,7 @@ const handleResetPassword = async () => {
                           <p className="form-error">비밀번호가 일치하지 않습니다.</p>
                         )}
                       </div>
+
                     </>
                   )}
 
@@ -650,6 +832,8 @@ const handleResetPassword = async () => {
                 <button type="button" className="auth__switch-link" onClick={() => {
                   setMode('login')
                   setAuthMethod(null)
+                  setRegistrationToken(null)
+                  setKakaoAuthData(null)
                   setActiveStep(0)
                 }}>
                   로그인
@@ -660,6 +844,11 @@ const handleResetPassword = async () => {
             </form>
           ) : (
             <form onSubmit={handleLogin}>
+              {signupSuccessMessage && (
+                <div className="auth__success">
+                  {signupSuccessMessage}
+                </div>
+              )}
               {!showEmailLogin && (
                 <>
                   <button
@@ -730,23 +919,23 @@ const handleResetPassword = async () => {
                     {isLoading ? '로그인 중...' : '로그인'}
                   </button>
 
-                  <p className="auth__forgot-password">
+                  <div className="auth__find-links">
                     <button
                       type="button"
                       className="auth__forgot-link"
-                      onClick={() => setShowFindId(true)}
+                      onClick={() => { setError(''); setShowFindEmail(true); }}
                     >
-                      아이디 찾기
+                      이메일 찾기
                     </button>
-                    {' | '}
+                    <span className="auth__find-links-divider">|</span>
                     <button
                       type="button"
                       className="auth__forgot-link"
-                      onClick={() => setShowForgotPassword(true)}
+                      onClick={() => { setError(''); setShowForgotPassword(true); }}
                     >
                       비밀번호 찾기
                     </button>
-                  </p>
+                  </div>
                 </>
               )}
 
@@ -755,6 +944,8 @@ const handleResetPassword = async () => {
                 <button type="button" className="auth__switch-link" onClick={() => {
                   setMode('signup')
                   setAuthMethod(null)
+                  setRegistrationToken(null)
+                  setKakaoAuthData(null)
                   setShowEmailLogin(false)
                 }}>
                   회원가입
@@ -766,270 +957,328 @@ const handleResetPassword = async () => {
         </div>
       </div>
 
-      {/* 아이디 찾기 모달 */}
-<AnimatePresence>
-  {showFindId && (
-    <Motion.div
-      className="auth__modal-overlay"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={() => {
-        setShowFindId(false)
-        setFindIdEmail('')
-        setFindIdResult(null)
-      }}
-    >
-      <Motion.div
-        className="auth__modal"
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3>아이디 찾기</h3>
-        {findIdResult === 'found' ? (
-          <div className="auth__modal-success">
-            <span>✓</span>
-            <p>입력하신 이메일로 가입된 계정이 있습니다.</p>
-            <button
-              type="button"
-              className="btn btn--primary btn--block"
-              onClick={() => {
-                setShowFindId(false)
-                setFindIdEmail('')
-                setFindIdResult(null)
-              }}
+      {/* 이메일 찾기 모달 */}
+      <AnimatePresence>
+        {showFindEmail && (
+          <Motion.div
+            className="auth__modal-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => {
+              setShowFindEmail(false)
+              setFindEmailInput('')
+              setFindEmailResult(null)
+            }}
+          >
+            <Motion.div
+              className="auth__modal auth__modal--find-email"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
             >
-              확인
-            </button>
-          </div>
-        ) : findIdResult === 'notFound' ? (
-          <div className="auth__modal-error">
-            <span>✗</span>
-            <p>입력하신 이메일로 가입된 계정을 찾을 수 없습니다.</p>
-            <button
-              type="button"
-              className="btn btn--primary btn--block"
-              onClick={() => {
-                setFindIdResult(null)
-                setFindIdEmail('')
-              }}
-            >
-              다시 시도
-            </button>
-          </div>
-        ) : (
-          <>
-            <p>가입한 이메일을 입력해주세요.</p>
-            <div className="form-group">
-              <input
-                type="email"
-                className="form-input"
-                placeholder="이메일 주소"
-                value={findIdEmail}
-                onChange={(e) => setFindIdEmail(e.target.value)}
-                autoFocus
-              />
-            </div>
-            <div className="auth__modal-buttons">
-              <button
-                type="button"
-                className="btn btn--secondary"
-                onClick={() => {
-                  setShowFindId(false)
-                  setFindIdEmail('')
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={!findIdEmail || isFindingId}
-                onClick={handleFindId}
-              >
-                {isFindingId ? '확인 중...' : '확인'}
-              </button>
-            </div>
-          </>
-        )}
-      </Motion.div>
-    </Motion.div>
-  )}
-</AnimatePresence>
-{/* Forgot Password Modal */}
-<AnimatePresence>
-  {showForgotPassword && (
-    <Motion.div
-      className="auth__modal-overlay"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={() => {
-        setShowForgotPassword(false)
-        setForgotEmail('')
-        setForgotCode('')
-        setForgotNewPassword('')
-        setForgotPasswordConfirm('')
-        setForgotEmailSent(false)
-        setForgotPasswordStep(1)
-      }}
-    >
-      <Motion.div
-        className="auth__modal"
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3>비밀번호 찾기</h3>
-        
-        {/* 1단계: 이메일 입력 */}
-        {forgotPasswordStep === 1 && (
-          <>
-            <p>가입한 이메일을 입력해주세요.</p>
-            <div className="form-group">
-              <input
-                type="email"
-                className="form-input"
-                placeholder="이메일 주소"
-                value={forgotEmail}
-                onChange={(e) => setForgotEmail(e.target.value)}
-                autoFocus
-              />
-            </div>
-            {error && (
-              <div className="auth__error" style={{ marginBottom: '1rem' }}>
-                <span>⚠️</span> {error}
+              <div className="auth__modal-header">
+                <h3>이메일 찾기</h3>
+                <button
+                  type="button"
+                  className="auth__modal-close"
+                  aria-label="닫기"
+                  onClick={() => {
+                    setShowFindEmail(false)
+                    setFindEmailInput('')
+                    setFindEmailResult(null)
+                  }}
+                >
+                  ×
+                </button>
               </div>
-            )}
-            <div className="auth__modal-buttons">
-              <button
-                type="button"
-                className="btn btn--secondary"
-                onClick={() => {
-                  setShowForgotPassword(false)
-                  setForgotEmail('')
-                  setError('')
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={!forgotEmail || isLoading}
-                onClick={handleSendPasswordResetEmail}
-              >
-                {isLoading ? '전송 중...' : '인증 메일 보내기'}
-              </button>
-            </div>
-          </>
-        )}
-        
-        {/* 2단계: 인증 코드 입력 */}
-        {forgotPasswordStep === 2 && (
-          <>
-            <p>이메일로 전송된 인증 코드를 입력해주세요.</p>
-            <div className="form-group">
-              <input
-                type="text"
-                className="form-input"
-                placeholder="인증 코드"
-                value={forgotCode}
-                onChange={(e) => setForgotCode(e.target.value)}
-                autoFocus
-              />
-            </div>
-            {error && (
-              <div className="auth__error" style={{ marginBottom: '1rem' }}>
-                <span>⚠️</span> {error}
-              </div>
-            )}
-            <div className="auth__modal-buttons">
-              <button
-                type="button"
-                className="btn btn--secondary"
-                onClick={() => {
-                  setForgotPasswordStep(1)
-                  setForgotCode('')
-                }}
-              >
-                이전
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={!forgotCode}
-                onClick={handleVerifyCode}
-              >
-                다음
-              </button>
-            </div>
-          </>
-        )}
-        
-        {/* 3단계: 새 비밀번호 입력 */}
-        {forgotPasswordStep === 3 && (
-          <>
-            <p>새 비밀번호를 입력해주세요.</p>
-            <div className="form-group">
-              <label className="form-label">새 비밀번호</label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder="6자 이상, 특수문자 포함"
-                value={forgotNewPassword}
-                onChange={(e) => setForgotNewPassword(e.target.value)}
-                autoFocus
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">비밀번호 확인</label>
-              <input
-                type="password"
-                className={`form-input ${forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm ? 'form-input--error' : ''}`}
-                placeholder="비밀번호 확인"
-                value={forgotPasswordConfirm}
-                onChange={(e) => setForgotPasswordConfirm(e.target.value)}
-              />
-              {forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm && (
-                <p className="form-error">비밀번호가 일치하지 않습니다.</p>
+              {findEmailResult === 'found' ? (
+                <div className="auth__modal-success">
+                  <span className="auth__modal-icon auth__modal-icon--success">✓</span>
+                  <p>입력하신 이메일로 가입된 계정이 있습니다.<br />해당 이메일로 로그인해 주세요.</p>
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--block"
+                    onClick={() => {
+                      setShowFindEmail(false)
+                      setFindEmailInput('')
+                      setFindEmailResult(null)
+                    }}
+                  >
+                    확인
+                  </button>
+                </div>
+              ) : findEmailResult === 'notFound' ? (
+                <div className="auth__modal-error">
+                  <span className="auth__modal-icon auth__modal-icon--error">✗</span>
+                  <p>입력하신 이메일로 가입된 계정을 찾을 수 없습니다.</p>
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--block"
+                    onClick={() => {
+                      setFindEmailResult(null)
+                      setFindEmailInput('')
+                    }}
+                  >
+                    다시 시도
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p className="auth__modal-desc">가입 시 사용한 이메일을 입력하시면, 해당 이메일로 가입된 계정이 있는지 확인해 드립니다.</p>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="find-email-input">이메일</label>
+                    <input
+                      id="find-email-input"
+                      type="email"
+                      className="form-input"
+                      placeholder="example@email.com"
+                      value={findEmailInput}
+                      onChange={(e) => setFindEmailInput(e.target.value)}
+                      autoFocus
+                      autoComplete="email"
+                    />
+                  </div>
+                  <div className="auth__modal-buttons">
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      onClick={() => {
+                        setShowFindEmail(false)
+                        setFindEmailInput('')
+                      }}
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={!findEmailInput?.trim() || isFindingEmail}
+                      onClick={handleFindEmail}
+                    >
+                      {isFindingEmail ? '확인 중...' : '확인'}
+                    </button>
+                  </div>
+                </>
               )}
-            </div>
-            {error && (
-              <div className="auth__error" style={{ marginBottom: '1rem' }}>
-                <span>⚠️</span> {error}
-              </div>
-            )}
-            <div className="auth__modal-buttons">
-              <button
-                type="button"
-                className="btn btn--secondary"
-                onClick={() => {
-                  setForgotPasswordStep(2)
-                  setForgotNewPassword('')
-                  setForgotPasswordConfirm('')
-                }}
-              >
-                이전
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={!forgotNewPassword || !forgotPasswordConfirm || isLoading}
-                onClick={handleResetPassword}
-              >
-                {isLoading ? '재설정 중...' : '비밀번호 재설정'}
-              </button>
-            </div>
-          </>
+            </Motion.div>
+          </Motion.div>
         )}
-      </Motion.div>
-    </Motion.div>
-  )}
-</AnimatePresence>
+      </AnimatePresence>
+      {/* 비밀번호 찾기 모달 */}
+      <AnimatePresence>
+        {showForgotPassword && (
+          <Motion.div
+            className="auth__modal-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => {
+              setShowForgotPassword(false)
+              setForgotEmail('')
+              setForgotCode('')
+              setForgotNewPassword('')
+              setForgotPasswordConfirm('')
+              setForgotEmailSent(false)
+              setForgotPasswordStep(1)
+              setError('')
+            }}
+          >
+            <Motion.div
+              className="auth__modal auth__modal--password"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="auth__modal-header">
+                <h3>비밀번호 찾기</h3>
+                <button
+                  type="button"
+                  className="auth__modal-close"
+                  aria-label="닫기"
+                  onClick={() => {
+                    setShowForgotPassword(false)
+                    setForgotPasswordStep(1)
+                    setForgotEmail('')
+                    setForgotCode('')
+                    setForgotNewPassword('')
+                    setForgotPasswordConfirm('')
+                    setForgotEmailSent(false)
+                    setError('')
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="auth__modal-steps">
+                <span className={forgotPasswordStep >= 1 ? 'auth__modal-step--active' : ''}>1. 이메일 입력</span>
+                <span className="auth__modal-step-line" />
+                <span className={forgotPasswordStep >= 2 ? 'auth__modal-step--active' : ''}>2. 인증 코드</span>
+                <span className="auth__modal-step-line" />
+                <span className={forgotPasswordStep >= 3 ? 'auth__modal-step--active' : ''}>3. 새 비밀번호</span>
+              </div>
+
+              {/* 1단계: 이메일 입력 */}
+                    {forgotPasswordStep === 1 && (
+                <>
+                  <p className="auth__modal-desc">가입한 이메일 주소를 입력하시면 인증 코드를 보내드립니다.</p>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="forgot-email-input">이메일</label>
+                    <input
+                      id="forgot-email-input"
+                      type="email"
+                      className="form-input"
+                      placeholder="example@email.com"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      autoFocus
+                      autoComplete="email"
+                    />
+                  </div>
+                  {error && (
+                    <div className="auth__modal-error-inline">
+                      <span>⚠️</span> {error}
+                    </div>
+                  )}
+                  <div className="auth__modal-buttons">
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      onClick={() => {
+                        setShowForgotPassword(false)
+                        setForgotEmail('')
+                        setError('')
+                      }}
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={!forgotEmail?.trim() || isLoading}
+                      onClick={handleSendPasswordResetEmail}
+                    >
+                      {isLoading ? '전송 중...' : '인증 메일 보내기'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* 2단계: 인증 코드 입력 */}
+              {forgotPasswordStep === 2 && (
+                <>
+                  <p className="auth__modal-desc">{forgotEmail}로 전송된 인증 코드를 입력해주세요.</p>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="forgot-code-input">인증 코드</label>
+                    <input
+                      id="forgot-code-input"
+                      type="text"
+                      className="form-input"
+                      placeholder="6자리 코드"
+                      value={forgotCode}
+                      onChange={(e) => setForgotCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      maxLength={6}
+                      autoFocus
+                      autoComplete="one-time-code"
+                    />
+                  </div>
+                  {error && (
+                    <div className="auth__modal-error-inline">
+                      <span>⚠️</span> {error}
+                    </div>
+                  )}
+                  <div className="auth__modal-buttons">
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      onClick={() => {
+                        setForgotPasswordStep(1)
+                        setForgotCode('')
+                        setError('')
+                      }}
+                    >
+                      이전
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={!forgotCode || forgotCode.length < 4}
+                      onClick={handleVerifyCode}
+                    >
+                      다음
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* 3단계: 새 비밀번호 입력 */}
+              {forgotPasswordStep === 3 && (
+                <>
+                  <p className="auth__modal-desc">새 비밀번호를 입력해주세요. (6자 이상, 특수문자 포함)</p>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="forgot-new-pw">새 비밀번호</label>
+                    <input
+                      id="forgot-new-pw"
+                      type="password"
+                      className="form-input"
+                      placeholder="6자 이상, 특수문자 포함"
+                      value={forgotNewPassword}
+                      onChange={(e) => setForgotNewPassword(e.target.value)}
+                      autoFocus
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="forgot-new-pw-confirm">비밀번호 확인</label>
+                    <input
+                      id="forgot-new-pw-confirm"
+                      type="password"
+                      className={`form-input ${forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm ? 'form-input--error' : ''}`}
+                      placeholder="비밀번호 확인"
+                      value={forgotPasswordConfirm}
+                      onChange={(e) => setForgotPasswordConfirm(e.target.value)}
+                      autoComplete="new-password"
+                    />
+                    {forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm && (
+                      <p className="form-error">비밀번호가 일치하지 않습니다.</p>
+                    )}
+                  </div>
+                  {error && (
+                    <div className="auth__modal-error-inline">
+                      <span>⚠️</span> {error}
+                    </div>
+                  )}
+                  <div className="auth__modal-buttons">
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      onClick={() => {
+                        setForgotPasswordStep(2)
+                        setForgotNewPassword('')
+                        setForgotPasswordConfirm('')
+                        setError('')
+                      }}
+                    >
+                      이전
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={!forgotNewPassword || !forgotPasswordConfirm || forgotNewPassword.length < 6 || forgotNewPassword !== forgotPasswordConfirm || isLoading}
+                      onClick={handleResetPassword}
+                    >
+                      {isLoading ? '재설정 중...' : '비밀번호 재설정'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </Motion.div>
+          </Motion.div>
+        )}
+      </AnimatePresence>
 
       {/* 카카오 알림 설정 모달 */}
       <AnimatePresence>

@@ -210,7 +210,7 @@ export default function RewardsOverview() {
         {/* Welcome Header */}
         <header className="rewards__header">
           <div className="rewards__welcome">
-            <h1>안녕하세요, {user?.name || '사용자'}님!</h1>
+            <h1>안녕하세요, {user?.name || user?.nickname || '회원'}님!</h1>
             <p>오늘도 면접 준비 화이팅하세요</p>
           </div>
         </header>
