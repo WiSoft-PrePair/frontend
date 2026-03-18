@@ -17,9 +17,6 @@ import {
   kakaoCallback,
   kakaoRegister,
 } from '../utils/memberApi'
-import { th } from 'framer-motion/client'
-
-const API_BASE = '/api'
 
 const steps = [
   { id: 'account', label: '기본 정보' },
@@ -86,10 +83,9 @@ const [showFindEmail, setShowFindEmail] = useState(false)
   const [findEmailResult, setFindEmailResult] = useState(null) // null | 'found' | 'notFound'
   const [isFindingEmail, setIsFindingEmail] = useState(false)
 
-const [forgotPasswordStep, setForgotPasswordStep] = useState(1) // 1: 이메일, 2: 코드, 3: 새 비밀번호
+const [forgotPasswordStep, setForgotPasswordStep] = useState(1) // 1: 이메일, 2: 코드, 3: 임시 비밀번호 확인
 const [forgotCode, setForgotCode] = useState('')
-const [forgotNewPassword, setForgotNewPassword] = useState('')
-const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
+const [temporaryPassword, setTemporaryPassword] = useState('')
 
   useEffect(() => {
     const paramMode = searchParams.get('mode')
@@ -100,9 +96,21 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
     }
   }, [searchParams])
 
+  // OAuth 에러가 쿼리로 넘어오면 안내
+  useEffect(() => {
+    const oauthError = searchParams.get('oauthError')
+    if (!oauthError) return
+    const desc = searchParams.get('oauthErrorDescription')
+    setMode('login')
+    setShowEmailLogin(true)
+    setError(desc ? `카카오 인증에 실패했습니다. (${desc})` : '카카오 인증에 실패했습니다.')
+    navigate('/auth?mode=login', { replace: true })
+  }, [searchParams, navigate])
+
   // 카카오 OAuth 콜백: URL에 code가 있으면 callback API 호출 후 신규/기존 회원 분기
   useEffect(() => {
-    const code = searchParams.get('code')
+    const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
+    const code = searchParams.get('code') || hashParams.get('code')
     if (!code || !code.trim()) return
 
     let cancelled = false
@@ -115,7 +123,7 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
         const data = response?.data ?? response
 
         if (data?.isNewMember === true) {
-          // 신규 가입자 → 회원가입 화면으로
+          // 신규 가입자 → 카카오 정보(prefilledData)를 들고 회원가입 화면으로 이동
           const token = data.registrationToken
           const prefilled = data.prefilledData ?? {}
           setRegistrationToken(token)
@@ -129,9 +137,12 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
           // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
           navigate('/auth?mode=signup', { replace: true })
         } else {
-          // 기존 회원 로그인
-          setUserFromAuthResponse(response)
-          navigate(redirectFrom || '/mypage', { replace: true })
+          // 기존 회원: 카카오로 인증만 하고, 실제 서비스 이용 전에는 반드시 한번 더 로그인하도록 유도
+          setMode('login')
+          setShowEmailLogin(true)
+          setSignupSuccessMessage('카카오 인증이 완료되었습니다. 이메일/비밀번호로 다시 로그인해주세요.')
+          // URL에서 code 제거 + 로그인 모드로 강제
+          navigate('/auth?mode=login', { replace: true })
         }
       })
       .catch((err) => {
@@ -144,7 +155,7 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
       })
 
     return () => { cancelled = true }
-  }, [searchParams, navigate, redirectFrom, setUserFromAuthResponse, location.pathname])
+  }, [searchParams, navigate])
 
   // Validation
   const loginValid = loginForm.email && loginForm.password
@@ -211,44 +222,34 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
     }
   }
 
-  const handleVerifyCode = () => {
+  // 비밀번호 재설정: 인증 코드 확인 + 임시 비밀번호 발급
+  const handleIssueTemporaryPassword = async () => {
     if (!forgotCode) return
-    setForgotPasswordStep(3)
-  }
-
-  // 비밀번호 재설정 (memberApi)
-  const handleResetPassword = async () => {
-    if (!forgotNewPassword || !forgotPasswordConfirm) return
-    if (forgotNewPassword !== forgotPasswordConfirm) {
-      setError('비밀번호가 일치하지 않습니다.')
-      return
-    }
-    if (forgotNewPassword.length < 6) {
-      setError('비밀번호는 6자 이상이어야 합니다.')
-      return
-    }
-    if (!/[^A-Za-z0-9]/.test(forgotNewPassword)) {
-      setError('비밀번호에 특수문자를 포함해주세요.')
-      return
-    }
     setIsLoading(true)
     setError('')
     try {
-      await resetPasswordApi({
+      const response = await resetPasswordApi({
         email: forgotEmail,
         code: forgotCode,
-        new_password: forgotNewPassword,
       })
-      setShowForgotPassword(false)
-      setForgotPasswordStep(1)
-      setForgotEmail('')
-      setForgotCode('')
-      setForgotNewPassword('')
-      setForgotPasswordConfirm('')
-      setForgotEmailSent(false)
-      alert('비밀번호가 성공적으로 재설정되었습니다.')
+
+      // BE에서 내려주는 임시 비밀번호 필드 추론
+      const data = response?.data ?? response
+      const tempPw =
+        data?.temporaryPassword ||
+        data?.tempPassword ||
+        data?.password ||
+        data?.temp_pw ||
+        ''
+
+      if (!tempPw) {
+        throw new Error('임시 비밀번호를 가져오지 못했습니다. 다시 시도해주세요.')
+      }
+
+      setTemporaryPassword(tempPw)
+      setForgotPasswordStep(3)
     } catch (err) {
-      setError(err.message || '비밀번호 재설정에 실패했습니다.')
+      setError(err.message || '임시 비밀번호 발급에 실패했습니다.')
     } finally {
       setIsLoading(false)
     }
@@ -266,26 +267,36 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
         const notification = signupForm.notificationKakao ? 'BOTH' : 'kakao'
-        const response = await kakaoRegister({
+        await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
           notification,
           frequency,
         })
-        setUserFromAuthResponse(response)
         setRegistrationToken(null)
-        navigate(redirectFrom || '/mypage', { replace: true })
+        // 카카오 회원도 가입 후에는 반드시 다시 로그인
+        setMode('login')
+        setShowEmailLogin(true)
+        setLoginForm((prev) => ({
+          ...prev,
+          email: signupForm.email?.trim() || prev.email,
+        }))
+        setError('')
+        setSignupSuccessMessage('카카오 회원가입이 완료되었습니다. 다시 로그인해주세요.')
+        // URL 모드도 login으로 맞춰 줌
+        navigate('/auth?mode=login', { replace: true })
         return
       }
 
       await signup(signupForm)
-      // 자동 로그인 없이 로그인 화면으로 전환 (이메일 회원가입)
+      // 이메일 회원가입도 자동 로그인 없이 로그인 화면으로 전환
       setMode('login')
       setShowEmailLogin(true)
       setLoginForm((prev) => ({ ...prev, email: signupForm.email?.trim() || prev.email }))
       setError('')
-      setTimeout(() => setSignupSuccessMessage('회원가입이 완료되었습니다. 로그인해주세요.'), 0)
-      setTimeout(() => setSignupSuccessMessage(''), 5000)
+      setSignupSuccessMessage('회원가입이 완료되었습니다. 로그인해주세요.')
+      // URL 모드도 login으로 맞춰 줌
+      navigate('/auth?mode=login', { replace: true })
     } catch (err) {
       setError(err.message || '회원가입에 실패했습니다.')
     } finally {
@@ -1066,8 +1077,7 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
               setShowForgotPassword(false)
               setForgotEmail('')
               setForgotCode('')
-              setForgotNewPassword('')
-              setForgotPasswordConfirm('')
+              setTemporaryPassword('')
               setForgotEmailSent(false)
               setForgotPasswordStep(1)
               setError('')
@@ -1106,7 +1116,7 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
                 <span className="auth__modal-step-line" />
                 <span className={forgotPasswordStep >= 2 ? 'auth__modal-step--active' : ''}>2. 인증 코드</span>
                 <span className="auth__modal-step-line" />
-                <span className={forgotPasswordStep >= 3 ? 'auth__modal-step--active' : ''}>3. 새 비밀번호</span>
+                <span className={forgotPasswordStep >= 3 ? 'auth__modal-step--active' : ''}>3. 임시 비밀번호 확인</span>
               </div>
 
               {/* 1단계: 이메일 입력 */}
@@ -1155,7 +1165,7 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
                 </>
               )}
 
-              {/* 2단계: 인증 코드 입력 */}
+              {/* 2단계: 인증 코드 입력 + 임시 비밀번호 발급 */}
               {forgotPasswordStep === 2 && (
                 <>
                   <p className="auth__modal-desc">{forgotEmail}로 전송된 인증 코드를 입력해주세요.</p>
@@ -1193,46 +1203,27 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
                     <button
                       type="button"
                       className="btn btn--primary"
-                      disabled={!forgotCode || forgotCode.length < 4}
-                      onClick={handleVerifyCode}
+                      disabled={!forgotCode || forgotCode.length < 4 || isLoading}
+                      onClick={handleIssueTemporaryPassword}
                     >
-                      다음
+                      {isLoading ? '발급 중...' : '임시 비밀번호 받기'}
                     </button>
                   </div>
                 </>
               )}
 
-              {/* 3단계: 새 비밀번호 입력 */}
+              {/* 3단계: 임시 비밀번호 안내 */}
               {forgotPasswordStep === 3 && (
                 <>
-                  <p className="auth__modal-desc">새 비밀번호를 입력해주세요. (6자 이상, 특수문자 포함)</p>
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="forgot-new-pw">새 비밀번호</label>
-                    <input
-                      id="forgot-new-pw"
-                      type="password"
-                      className="form-input"
-                      placeholder="6자 이상, 특수문자 포함"
-                      value={forgotNewPassword}
-                      onChange={(e) => setForgotNewPassword(e.target.value)}
-                      autoFocus
-                      autoComplete="new-password"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="forgot-new-pw-confirm">비밀번호 확인</label>
-                    <input
-                      id="forgot-new-pw-confirm"
-                      type="password"
-                      className={`form-input ${forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm ? 'form-input--error' : ''}`}
-                      placeholder="비밀번호 확인"
-                      value={forgotPasswordConfirm}
-                      onChange={(e) => setForgotPasswordConfirm(e.target.value)}
-                      autoComplete="new-password"
-                    />
-                    {forgotPasswordConfirm && forgotNewPassword !== forgotPasswordConfirm && (
-                      <p className="form-error">비밀번호가 일치하지 않습니다.</p>
-                    )}
+                  <p className="auth__modal-desc">
+                    아래 임시 비밀번호로 먼저 로그인한 뒤,<br />
+                    <strong>설정 &gt; 보안 설정 &gt; 비밀번호 변경</strong>에서 새 비밀번호를 설정해주세요.
+                  </p>
+                  <div className="auth__temp-password-box">
+                    <p className="auth__temp-password-label">임시 비밀번호</p>
+                    <p className="auth__temp-password-value">
+                      {temporaryPassword || '발급된 임시 비밀번호를 불러오지 못했습니다.'}
+                    </p>
                   </div>
                   {error && (
                     <div className="auth__modal-error-inline">
@@ -1242,23 +1233,18 @@ const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('')
                   <div className="auth__modal-buttons">
                     <button
                       type="button"
-                      className="btn btn--secondary"
+                      className="btn btn--primary"
                       onClick={() => {
-                        setForgotPasswordStep(2)
-                        setForgotNewPassword('')
-                        setForgotPasswordConfirm('')
+                        setShowForgotPassword(false)
+                        setForgotPasswordStep(1)
+                        setForgotEmail('')
+                        setForgotCode('')
+                        setTemporaryPassword('')
+                        setForgotEmailSent(false)
                         setError('')
                       }}
                     >
-                      이전
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--primary"
-                      disabled={!forgotNewPassword || !forgotPasswordConfirm || forgotNewPassword.length < 6 || forgotNewPassword !== forgotPasswordConfirm || isLoading}
-                      onClick={handleResetPassword}
-                    >
-                      {isLoading ? '재설정 중...' : '비밀번호 재설정'}
+                      닫기
                     </button>
                   </div>
                 </>

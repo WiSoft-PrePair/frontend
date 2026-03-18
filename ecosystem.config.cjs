@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'fe',
       script: '/home/prepair/.asdf/installs/pnpm/9.15.1/bin/pnpm',
-      args: 'run preview',
+      args: 'run prod',
       cwd: '/home/prepair/prepair/prepair-fe',
       instances: 1,
       exec_mode: 'fork',

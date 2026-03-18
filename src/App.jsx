@@ -4,6 +4,7 @@ import { Ssgoi } from "@ssgoi/react";
 import { fade, scroll, drill } from "@ssgoi/react/view-transitions";
 import LandingPage from './pages/Landing'
 import AuthPage from './pages/Auth'
+import KakaoCallbackRedirect from './pages/KakaoCallbackRedirect'
 import InterviewPage from './pages/Interview'
 import SettingsPage from './pages/Settings'
 import RewardsOverview from './pages/rewards/RewardsOverview'
@@ -43,6 +44,7 @@ function AppRoutes() {
       <Route element={<AppLayout />}>
         <Route index element={<LandingPage />} />
         <Route path="auth" element={<AuthPage />} />
+        <Route path="auth/kakao/callback" element={<KakaoCallbackRedirect />} />
         <Route
           path="interview"
           element={

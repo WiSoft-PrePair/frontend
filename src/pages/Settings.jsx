@@ -12,6 +12,7 @@ import {
   requestEmailChangeVerification,
   verifyEmailChange,
   updateEmail,
+  kakaoLink,
 } from '../utils/memberApi'
 
 export default function SettingsPage() {
@@ -65,7 +66,6 @@ export default function SettingsPage() {
 
   // 비밀번호 변경 상태
   const [passwordForm, setPasswordForm] = useState({
-    currentPassword: '',
     newPassword: '',
     newPasswordConfirm: '',
   })
@@ -129,6 +129,9 @@ export default function SettingsPage() {
       if (!accessToken) {
         console.warn('[Settings] accessToken is missing. 회원정보 수정 API를 호출할 수 없습니다.')
       } else {
+        const shouldLinkKakao =
+          form.notificationKakao && !user?.notificationKakao
+
         // cadence(id: 'daily' | 'weekly') → frequency('every' | 'weekly') 매핑
         const cadenceId = form.cadence?.id ?? form.cadence
         const frequency = cadenceId === 'weekly' ? 'weekly' : 'every'
@@ -161,6 +164,20 @@ export default function SettingsPage() {
           cadence: form.cadence,
           notificationKakao: updated.notificationKakao ?? form.notificationKakao,
         })
+
+        // 카카오톡 알림을 새로 활성화한 경우, 카카오 링크 인증 플로우 시작
+        if (shouldLinkKakao) {
+          try {
+            const response = await kakaoLink(accessToken, {})
+            const url = response?.data?.url ?? response?.url
+            if (url) {
+              window.location.href = url
+              return
+            }
+          } catch (error) {
+            console.error('[Settings] kakaoLink error:', error)
+          }
+        }
       }
 
       setSaved(true)
@@ -298,10 +315,10 @@ export default function SettingsPage() {
   }
 
   const handleChangePassword = async () => {
-    const { currentPassword, newPassword, newPasswordConfirm } = passwordForm
+    const { newPassword, newPasswordConfirm } = passwordForm
 
-    if (!currentPassword || !newPassword || !newPasswordConfirm) {
-      setPasswordMessage({ type: 'error', text: '모든 비밀번호 항목을 입력해주세요.' })
+    if (!newPassword || !newPasswordConfirm) {
+      setPasswordMessage({ type: 'error', text: '새 비밀번호와 확인 비밀번호를 입력해주세요.' })
       return
     }
     if (newPassword.length < 6) {
@@ -317,26 +334,18 @@ export default function SettingsPage() {
       return
     }
 
-    const accessToken = getAccessToken?.()
-    if (!accessToken) {
-      setPasswordMessage({
-        type: 'error',
-        text: '로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.',
-      })
-      return
-    }
-
     setIsUpdatingPassword(true)
     setPasswordMessage({ type: '', text: '' })
 
     try {
-      await updatePassword(accessToken, {
-        currentPassword,
-        newPassword,
-      })
+      const accessToken = getAccessToken?.()
+      if (!accessToken) {
+        throw new Error('로그인 정보가 없습니다. 다시 로그인 후 시도해주세요.')
+      }
+
+      await updatePassword(accessToken, { newPassword })
 
       setPasswordForm({
-        currentPassword: '',
         newPassword: '',
         newPasswordConfirm: '',
       })
@@ -552,26 +561,10 @@ export default function SettingsPage() {
               <div className="settings__security-block">
                 <h3 className="settings__security-title">비밀번호 변경</h3>
                 <p className="settings__security-description">
-                  현재 비밀번호를 확인한 후 새 비밀번호로 변경합니다.
+                  임시 비밀번호로 로그인하신 뒤, 여기에서 새 비밀번호를 설정해주세요.
                 </p>
 
                 <div className="settings__security-grid">
-                  <div className="form-group">
-                    <label className="form-label">현재 비밀번호</label>
-                    <input
-                      type="password"
-                      className="form-input"
-                      value={passwordForm.currentPassword}
-                      onChange={(e) =>
-                        setPasswordForm((prev) => ({
-                          ...prev,
-                          currentPassword: e.target.value,
-                        }))
-                      }
-                      placeholder="현재 사용 중인 비밀번호"
-                    />
-                  </div>
-
                   <div className="form-group">
                     <label className="form-label">새 비밀번호</label>
                     <input

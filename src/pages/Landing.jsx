@@ -48,6 +48,19 @@ export default function LandingPage() {
     }
 
     useEffect(() => {
+        // 1) 카카오 OAuth 콜백이 랜딩으로 떨어진 경우 → /auth로 다시 전달
+        // - 일반적으로는 쿼리(?code=...)로 오지만, 환경에 따라 해시(#code=...)로 오는 케이스도 방어
+        const queryCode = searchParams.get('code')
+        const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
+        const hashCode = hashParams.get('code')
+        const code = queryCode || hashCode
+
+        if (code) {
+            navigate(`/auth?mode=signup&code=${encodeURIComponent(code)}`, { replace: true })
+            return
+        }
+
+        // 2) Settings 페이지에서 카카오 링크 연동 완료 후 돌아온 경우 처리
         const kakaoSuccess = searchParams.get('kakao') === 'success'
         const email = searchParams.get('email')
         

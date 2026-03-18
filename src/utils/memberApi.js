@@ -391,16 +391,16 @@ export async function requestPasswordResetEmail(payload) {
 }
 
 /**
- * 비밀번호 재설정(임시 변경) | POST /api/members/password-reset
- * BE 스펙: email, verificationCode(4자 이상), new_password
- * @param {{ email: string, code: string, new_password: string }} payload
+ * 비밀번호 재설정 | POST /api/members/password-reset
+ * BE 스펙: email, verificationCode(4자 이상)
+ * - 서버에서 임시 비밀번호를 생성해 응답으로 내려줍니다.
+ * @param {{ email: string, code: string }} payload
  */
 export async function resetPassword(payload) {
   try {
     const body = {
       email: payload.email,
       verificationCode: String(payload.code ?? ''),
-      new_password: payload.new_password,
     }
     const response = await fetch(`${API_BASE}/members/password-reset`, {
       method: 'POST',
