@@ -8,6 +8,7 @@ import logo from '../assets/logo.png'
 import '../styles/pages/Auth.css'
 import {
   getMemberByEmail,
+  getMe,
   requestSignupEmailVerification,
   verifySignupEmail,
   registerMember,
@@ -29,7 +30,7 @@ export default function AuthPage() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
 
-  const { user, login, signup, jobTracks, cadencePresets } = useAppState()
+  const { user, login, signup, setUserFromAuthResponse, jobTracks, cadencePresets } = useAppState()
   const isMobile = useMediaQuery('(max-width: 768px)')
 
   useEffect(() => {
