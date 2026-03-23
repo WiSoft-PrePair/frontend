@@ -17,6 +17,7 @@ import {
   kakaoPromptLogin,
   kakaoCallback,
   kakaoRegister,
+  updateMember,
 } from '../utils/memberApi'
 
 const steps = [
@@ -197,7 +198,12 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       await login({ email: loginForm.email, password: loginForm.password })
       navigate(redirectFrom || '/mypage', { replace: true })
     } catch (err) {
-      setError(err.message || '로그인에 실패했습니다.')
+      const base = err.message || '로그인에 실패했습니다.'
+      const kakaoHint =
+        err.statusCode === 401
+          ? ' 카카오로 가입한 계정은 서비스에 비밀번호가 없을 수 있습니다. 아래에서 "카카오톡으로 로그인"을 이용해 주세요.'
+          : ''
+      setError(`${base}${kakaoHint}`)
     } finally {
       setIsLoading(false)
     }
@@ -283,18 +289,27 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
-        // POST /api/auth/kakao/register — 명세: registrationToken, job, notification, frequency 만 (예: notification "kakao")
+        const displayName = signupForm.name?.trim() || ''
+        // 가입 폼에서 입력한 표시 이름을 서버에 반영 (nickname)
         const registerResponse = await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
           notification: 'kakao',
           frequency,
+          ...(displayName ? { nickname: displayName } : {}),
         })
         setRegistrationToken(null)
         setUserFromAuthResponse(registerResponse)
         const accessToken =
           registerResponse?.data?.accessToken ?? registerResponse?.accessToken
         if (accessToken) {
+          if (displayName) {
+            try {
+              await updateMember(accessToken, { nickname: displayName })
+            } catch {
+              /* register 응답에 이미 반영되었거나 PATCH가 달라도 가입은 유지 */
+            }
+          }
           try {
             const me = await getMe(accessToken)
             setUserFromAuthResponse(me)
@@ -606,6 +621,11 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
 
                   <div className="form-group">
                     <label className="form-label">이름</label>
+                    {authMethod === 'kakao' && (
+                      <p className="form-helper auth__name-hint">
+                        서비스(헤더, 면접 안내 등)에 표시됩니다. 카카오 프로필과 다르게 입력할 수 있어요.
+                      </p>
+                    )}
                     <input
                       type="text"
                       className="form-input"
@@ -907,6 +927,20 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
 
               {showEmailLogin && (
                 <>
+                  <p className="auth__login-email-hint" role="note">
+                    카카오로 가입하셨다면 이메일·비밀번호 대신{' '}
+                    <button
+                      type="button"
+                      className="auth__login-email-hint-link"
+                      onClick={() => {
+                        setShowEmailLogin(false)
+                        setError('')
+                      }}
+                    >
+                      카카오톡으로 로그인
+                    </button>
+                    을 눌러 주세요.
+                  </p>
                   <div className="form-group">
                     <label className="form-label">이메일</label>
                     <input

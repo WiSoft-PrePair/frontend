@@ -84,7 +84,9 @@ export default function AppLayout() {
                       <span className="header__points">
                         💰 {user.points?.toLocaleString() || 0}
                       </span>
-                      <span className="header__name">{user.name}님</span>
+                      <span className="header__name">
+                        {user.name?.trim() ? `${user.name}님` : '회원님'}
+                      </span>
                     </div>
                   )}
                   <button

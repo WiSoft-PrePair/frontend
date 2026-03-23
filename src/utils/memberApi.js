@@ -8,13 +8,26 @@
 
 const API_BASE = '/api'
 
+/** BE가 { message } 또는 { error: { message } } 등으로 내려줄 때 공통 추출 */
+function parseApiErrorMessage(errorData) {
+  if (!errorData || typeof errorData !== 'object') return undefined
+  return (
+    errorData.message ??
+    errorData.error?.message ??
+    (typeof errorData.error === 'string' ? errorData.error : undefined)
+  )
+}
+
 // 에러 처리 헬퍼
 async function handleResponse(response) {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
-    const error = new Error(errorData.message || '요청 처리 중 오류가 발생했습니다.')
+    const message =
+      parseApiErrorMessage(errorData) || '요청 처리 중 오류가 발생했습니다.'
+    const error = new Error(message)
     error.statusCode = response.status
     error.isServerError = response.status >= 500
+    error.code = errorData.error?.code
     throw error
   }
   return response.json()
@@ -195,7 +208,7 @@ export async function kakaoCallback(payload) {
 
 /**
  * OAuth 회원가입 (카카오) | POST /api/auth/kakao/register
- * Body: { registrationToken, job, notification, frequency } — 예: notification "kakao", frequency "every"|"weekly"
+ * Body: { registrationToken, job, notification, frequency, nickname? }
  */
 export async function kakaoRegister(payload) {
   try {

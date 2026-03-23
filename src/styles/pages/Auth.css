@@ -296,6 +296,10 @@
   margin-top: 0;
 }
 
+.auth__name-hint {
+  margin-bottom: var(--spacing-xs);
+}
+
 .auth__email-verify .form-helper {
   margin-bottom: var(--spacing-xs);
 }
@@ -363,6 +367,31 @@
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   margin-bottom: var(--spacing-lg);
+}
+
+/* 이메일 로그인: 카카오 가입자 안내 */
+.auth__login-email-hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-600, #52525b);
+  line-height: 1.5;
+  margin: 0 0 var(--spacing-md);
+}
+
+.auth__login-email-hint-link {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary, #2563eb);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.auth__login-email-hint-link:hover {
+  color: var(--color-primary-dark, #1d4ed8);
 }
 
 /* Stepper */
