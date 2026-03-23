@@ -193,7 +193,10 @@ export async function kakaoCallback(payload) {
   }
 }
 
-/** OAuth 회원가입 (카카오) | POST /api/auth/kakao/register */
+/**
+ * OAuth 회원가입 (카카오) | POST /api/auth/kakao/register
+ * Body: { registrationToken, job, notification, frequency } — 예: notification "kakao", frequency "every"|"weekly"
+ */
 export async function kakaoRegister(payload) {
   try {
     const response = await fetch(`${API_BASE}/auth/kakao/register`, {
