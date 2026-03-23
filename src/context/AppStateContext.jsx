@@ -123,7 +123,9 @@ export function AppProvider({children}) {
       apiUser.notificationKakao ??
       apiUser.notification_kakao
     const notificationKakao =
-      rawNotification === 'kakao' || rawNotification === 'BOTH'
+      rawNotification === 'kakao' ||
+      rawNotification === 'BOTH' ||
+      rawNotification === 'both'
 
     // 백엔드 frequency(weekly | every) → 기존 cadence 필드에 매핑
     const rawFrequency =
@@ -210,12 +212,12 @@ export function AppProvider({children}) {
     const cadenceId = formData.cadence?.id ?? formData.cadence
     const frequency = cadenceId === 'weekly' ? 'weekly' : 'every'
 
-    // 알림 채널(email | kakao | BOTH)
+    // 알림 채널(email | kakao | BOTH | both)
     // - 이메일 회원가입: 기본 email, 카카오 알림 선택 시 BOTH
-    // - 카카오 회원가입: 카카오만 선택 시 kakao, 둘 다면 BOTH (formData.notificationKakao 기준)
+    // - 카카오 OAuth(registerMember 경로): both = 이메일+카카오톡, 미선택 시 email
     let notification = 'email'
     if (formData.authMethod === 'kakao') {
-      notification = formData.notificationKakao ? 'BOTH' : 'kakao'
+      notification = formData.notificationKakao ? 'both' : 'email'
     } else {
       notification = formData.notificationKakao ? 'BOTH' : 'email'
     }

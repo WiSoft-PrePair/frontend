@@ -266,11 +266,11 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
-        const notification = signupForm.notificationKakao ? 'BOTH' : 'kakao'
+        // POST /api/auth/kakao/register — 명세: registrationToken, job, notification, frequency 만 (예: notification "kakao")
         await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
-          notification,
+          notification: 'kakao',
           frequency,
         })
         setRegistrationToken(null)
