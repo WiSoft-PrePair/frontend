@@ -110,18 +110,35 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
   }, [searchParams, navigate])
 
   // 카카오 OAuth 콜백: URL에 code가 있으면 callback API 호출 후 신규/기존 회원 분기
+  // — OAuth code는 1회용이라 이펙트가 두 번 돌면(React Strict Mode 등) 두 번째 요청이 400이 납니다.
+  // — sessionStorage로 동일 code 교환을 한 번만 실행합니다.
   useEffect(() => {
     const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
     const code = searchParams.get('code') || hashParams.get('code')
     if (!code || !code.trim()) return
 
-    let cancelled = false
+    const lockKey = `kakao_oauth_exchange_${code}`
+    try {
+      const lock = sessionStorage.getItem(lockKey)
+      if (lock === 'done' || lock === 'pending') return
+      sessionStorage.setItem(lockKey, 'pending')
+    } catch {
+      /* sessionStorage 불가 시에도 진행 */
+    }
+
     setIsKakaoAuthenticating(true)
     setError('')
 
+    const clearLock = () => {
+      try {
+        sessionStorage.removeItem(lockKey)
+      } catch {
+        /* noop */
+      }
+    }
+
     kakaoCallback({ code })
       .then(async (response) => {
-        if (cancelled) return
         const data = response?.data ?? response
 
         if (data?.isNewMember === true) {
@@ -136,6 +153,11 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           setMode('signup')
           setAuthMethod('kakao')
           setShowKakaoNotificationModal(true)
+          try {
+            sessionStorage.setItem(lockKey, 'done')
+          } catch {
+            /* noop */
+          }
           // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
           navigate('/auth?mode=signup', { replace: true })
           return
@@ -151,10 +173,16 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           } catch {
             /* 최소 정보는 이미 callback 응답으로 반영됨 */
           }
+          try {
+            sessionStorage.setItem(lockKey, 'done')
+          } catch {
+            /* noop */
+          }
           // 로그인 상태는 상단 user 이펙트에서 redirectFrom || /mypage 로 이동
           return
         }
 
+        clearLock()
         setMode('login')
         setShowEmailLogin(true)
         setSignupSuccessMessage('')
@@ -164,15 +192,12 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
         navigate('/auth?mode=login', { replace: true })
       })
       .catch((err) => {
-        if (!cancelled) {
-          setError(err.message || '카카오 로그인에 실패했습니다.')
-        }
+        clearLock()
+        setError(err.message || '카카오 로그인에 실패했습니다.')
       })
       .finally(() => {
-        if (!cancelled) setIsKakaoAuthenticating(false)
+        setIsKakaoAuthenticating(false)
       })
-
-    return () => { cancelled = true }
   }, [searchParams, navigate, setUserFromAuthResponse])
 
   // Validation
