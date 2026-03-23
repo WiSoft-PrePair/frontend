@@ -8,6 +8,7 @@ import logo from '../assets/logo.png'
 import '../styles/pages/Auth.css'
 import {
   getMemberByEmail,
+  getMe,
   requestSignupEmailVerification,
   verifySignupEmail,
   registerMember,
@@ -118,7 +119,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setError('')
 
     kakaoCallback({ code })
-      .then((response) => {
+      .then(async (response) => {
         if (cancelled) return
         const data = response?.data ?? response
 
@@ -136,14 +137,30 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           setShowKakaoNotificationModal(true)
           // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
           navigate('/auth?mode=signup', { replace: true })
-        } else {
-          // 기존 회원: 카카오로 인증만 하고, 실제 서비스 이용 전에는 반드시 한번 더 로그인하도록 유도
-          setMode('login')
-          setShowEmailLogin(true)
-          setSignupSuccessMessage('카카오 인증이 완료되었습니다. 이메일/비밀번호로 다시 로그인해주세요.')
-          // URL에서 code 제거 + 로그인 모드로 강제
-          navigate('/auth?mode=login', { replace: true })
+          return
         }
+
+        // 기존 회원: 콜백 응답에 JWT가 있으면 즉시 로그인 (카카오 전용 계정은 비밀번호가 없을 수 있음)
+        const accessToken = data?.accessToken ?? response?.data?.accessToken
+        if (accessToken) {
+          setUserFromAuthResponse(response)
+          try {
+            const me = await getMe(accessToken)
+            setUserFromAuthResponse(me)
+          } catch {
+            /* 최소 정보는 이미 callback 응답으로 반영됨 */
+          }
+          // 로그인 상태는 상단 user 이펙트에서 redirectFrom || /mypage 로 이동
+          return
+        }
+
+        setMode('login')
+        setShowEmailLogin(true)
+        setSignupSuccessMessage('')
+        setError(
+          '카카오 로그인 응답에 로그인 정보가 없습니다. 잠시 후 다시 시도하거나 관리자에게 문의해주세요.',
+        )
+        navigate('/auth?mode=login', { replace: true })
       })
       .catch((err) => {
         if (!cancelled) {
@@ -155,7 +172,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       })
 
     return () => { cancelled = true }
-  }, [searchParams, navigate])
+  }, [searchParams, navigate, setUserFromAuthResponse])
 
   // Validation
   const loginValid = loginForm.email && loginForm.password
@@ -267,24 +284,25 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
         // POST /api/auth/kakao/register — 명세: registrationToken, job, notification, frequency 만 (예: notification "kakao")
-        await kakaoRegister({
+        const registerResponse = await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
           notification: 'kakao',
           frequency,
         })
         setRegistrationToken(null)
-        // 카카오 회원도 가입 후에는 반드시 다시 로그인
-        setMode('login')
-        setShowEmailLogin(true)
-        setLoginForm((prev) => ({
-          ...prev,
-          email: signupForm.email?.trim() || prev.email,
-        }))
-        setError('')
-        setSignupSuccessMessage('카카오 회원가입이 완료되었습니다. 다시 로그인해주세요.')
-        // URL 모드도 login으로 맞춰 줌
-        navigate('/auth?mode=login', { replace: true })
+        setUserFromAuthResponse(registerResponse)
+        const accessToken =
+          registerResponse?.data?.accessToken ?? registerResponse?.accessToken
+        if (accessToken) {
+          try {
+            const me = await getMe(accessToken)
+            setUserFromAuthResponse(me)
+          } catch {
+            /* 최소 정보는 이미 registerResponse 로 반영됨 */
+          }
+        }
+        // 로그인 상태는 상단 user 이펙트에서 redirectFrom || /mypage 로 이동
         return
       }
 
