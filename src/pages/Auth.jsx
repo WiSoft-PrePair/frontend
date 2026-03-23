@@ -116,7 +116,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setError('')
 
     kakaoCallback({ code })
-      .then((response) => {
+      .then(async (response) => {
         const data = response?.data ?? response
 
         if (data?.isNewMember === true) {
@@ -136,23 +136,50 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           return
         }
 
-        // 기존 회원: 카카오로 인증만 하고, 실제 서비스 이용 전에는 반드시 한번 더 로그인하도록 유도
-        setMode('login')
-        setShowEmailLogin(true)
-        setSignupSuccessMessage('카카오 인증이 완료되었습니다. 이메일/비밀번호로 다시 로그인해주세요.')
-        // URL에서 code 제거 + 로그인 모드로 강제
-        navigate('/auth?mode=login', { replace: true })
-      })
-      .catch((err) => {
+        // 기존 회원: 콜백 응답 토큰으로 즉시 로그인
+        const accessToken = data?.accessToken ?? response?.data?.accessToken
+        if (accessToken) {
+          setUserFromAuthResponse(response)
+          try {
+            const me = await getMe(accessToken)
+            setUserFromAuthResponse(me)
+          } catch {
+            // /auth/me 실패 시에도 콜백 응답의 토큰/최소 정보로 로그인 유지
+          }
+          return
+        }
+
         setMode('login')
         setShowEmailLogin(true)
         setSignupSuccessMessage('')
-        setError(err.message || '카카오 로그인에 실패했습니다.')
+        setError('카카오 로그인 응답에 로그인 정보가 없습니다. 잠시 후 다시 시도해주세요.')
+        navigate('/auth?mode=login', { replace: true })
+      })
+      .catch((err) => {
+        const message = err?.message || '카카오 로그인에 실패했습니다.'
+        const isMemberNotFound =
+          err?.statusCode === 400 && /회원 정보를 찾을 수 없습니다/.test(message)
+
+        if (isMemberNotFound) {
+          // 백엔드에서 미가입 카카오 계정으로 판단한 경우 회원가입 플로우로 유도
+          setMode('signup')
+          setAuthMethod(null)
+          setShowEmailLogin(false)
+          setSignupSuccessMessage('')
+          setError('아직 카카오 회원가입이 완료되지 않았습니다. "카카오톡으로 시작하기"로 가입을 진행해주세요.')
+          navigate('/auth?mode=signup', { replace: true })
+          return
+        }
+
+        setMode('login')
+        setShowEmailLogin(true)
+        setSignupSuccessMessage('')
+        setError(message)
       })
       .finally(() => {
         setIsKakaoAuthenticating(false)
       })
-  }, [searchParams, navigate])
+  }, [searchParams, navigate, setUserFromAuthResponse])
 
   // Validation
   const loginValid = loginForm.email && loginForm.password
