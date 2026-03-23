@@ -171,9 +171,10 @@ export async function refreshToken(payload) {
 }
 
 /**
- * OAuth 카카오 로그인/회원가입 시작 (prompt-login)
- * 백엔드가 카카오 인증 URL을 생성해주면, 프론트는 해당 URL로만 리다이렉트합니다.
- * 예: GET /api/auth/kakao/url?prompt=login → { data: { url: 'https://kauth.kakao.com/...' } }
+ * OAuth 카카오 로그인/회원가입 시작
+ * GET /api/auth/kakao/url?prompt=...
+ * - login: 기존 회원 로그인
+ * - signup: 신규 회원가입(콜백에서 registrationToken 등) — BE 스펙에 맞게 값 조정 가능
  */
 export async function kakaoPromptLogin(prompt = 'login') {
   try {
@@ -191,7 +192,10 @@ export async function kakaoPromptLogin(prompt = 'login') {
   }
 }
 
-/** OAuth 로그인 및 회원가입 (카카오 콜백) | POST /api/auth/kakao/callback */
+/**
+ * OAuth 로그인 및 회원가입 (카카오 콜백) | POST /api/auth/kakao/callback
+ * Body: { code, prompt? } — BE가 콜백에서 신규/기존 분기 시 prompt 를 쓰는 경우
+ */
 export async function kakaoCallback(payload) {
   try {
     const response = await fetch(`${API_BASE}/auth/kakao/callback`, {

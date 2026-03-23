@@ -17,7 +17,6 @@ import {
   kakaoPromptLogin,
   kakaoCallback,
   kakaoRegister,
-  updateMember,
 } from '../utils/memberApi'
 
 const steps = [
@@ -110,32 +109,13 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
   }, [searchParams, navigate])
 
   // 카카오 OAuth 콜백: URL에 code가 있으면 callback API 호출 후 신규/기존 회원 분기
-  // — OAuth code는 1회용이라 이펙트가 두 번 돌면(React Strict Mode 등) 두 번째 요청이 400이 납니다.
-  // — sessionStorage로 동일 code 교환을 한 번만 실행합니다.
   useEffect(() => {
     const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
     const code = searchParams.get('code') || hashParams.get('code')
     if (!code || !code.trim()) return
 
-    const lockKey = `kakao_oauth_exchange_${code}`
-    try {
-      const lock = sessionStorage.getItem(lockKey)
-      if (lock === 'done' || lock === 'pending') return
-      sessionStorage.setItem(lockKey, 'pending')
-    } catch {
-      /* sessionStorage 불가 시에도 진행 */
-    }
-
     setIsKakaoAuthenticating(true)
     setError('')
-
-    const clearLock = () => {
-      try {
-        sessionStorage.removeItem(lockKey)
-      } catch {
-        /* noop */
-      }
-    }
 
     kakaoCallback({ code })
       .then(async (response) => {
@@ -153,11 +133,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           setMode('signup')
           setAuthMethod('kakao')
           setShowKakaoNotificationModal(true)
-          try {
-            sessionStorage.setItem(lockKey, 'done')
-          } catch {
-            /* noop */
-          }
           // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
           navigate('/auth?mode=signup', { replace: true })
           return
@@ -173,16 +148,10 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           } catch {
             /* 최소 정보는 이미 callback 응답으로 반영됨 */
           }
-          try {
-            sessionStorage.setItem(lockKey, 'done')
-          } catch {
-            /* noop */
-          }
           // 로그인 상태는 상단 user 이펙트에서 redirectFrom || /mypage 로 이동
           return
         }
 
-        clearLock()
         setMode('login')
         setShowEmailLogin(true)
         setSignupSuccessMessage('')
@@ -192,7 +161,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
         navigate('/auth?mode=login', { replace: true })
       })
       .catch((err) => {
-        clearLock()
         setError(err.message || '카카오 로그인에 실패했습니다.')
       })
       .finally(() => {
@@ -314,27 +282,17 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
-        const displayName = signupForm.name?.trim() || ''
-        // 가입 폼에서 입력한 표시 이름을 서버에 반영 (nickname)
         const registerResponse = await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
           notification: 'kakao',
           frequency,
-          ...(displayName ? { nickname: displayName } : {}),
         })
         setRegistrationToken(null)
         setUserFromAuthResponse(registerResponse)
         const accessToken =
           registerResponse?.data?.accessToken ?? registerResponse?.accessToken
         if (accessToken) {
-          if (displayName) {
-            try {
-              await updateMember(accessToken, { nickname: displayName })
-            } catch {
-              /* register 응답에 이미 반영되었거나 PATCH가 달라도 가입은 유지 */
-            }
-          }
           try {
             const me = await getMe(accessToken)
             setUserFromAuthResponse(me)
@@ -372,8 +330,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setActiveStep((prev) => Math.max(prev - 1, 0))
   }
 
-  // 카카오 OAuth 시작: 프론트는 카카오와 직접 통신하지 않고,
-  // 백엔드 /api/auth/kakao/url?prompt=login → 전달받은 url 로만 리다이렉트합니다.
+  // 카카오 OAuth 시작: 백엔드 /api/auth/kakao/url?prompt=login → 전달받은 url 로만 리다이렉트
   const handleKakaoAuth = async () => {
     setError('')
     setIsKakaoAuthenticating(true)
@@ -413,7 +370,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setActiveStep(0) // Step 1로 이동 (기본 정보는 이미 채워짐)
   }
 
-  // 로그인용 카카오 OAuth (동일 prompt-login 사용, prompt=login)
+  // 로그인용 카카오 OAuth
   const handleKakaoLogin = () => {
     setError('')
     setIsKakaoAuthenticating(true)
