@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { motion as Motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motion'
 import { useAppState } from '../context/AppStateContext'
@@ -87,6 +87,7 @@ const [showFindEmail, setShowFindEmail] = useState(false)
 const [forgotPasswordStep, setForgotPasswordStep] = useState(1) // 1: 이메일, 2: 코드, 3: 임시 비밀번호 확인
 const [forgotCode, setForgotCode] = useState('')
 const [temporaryPassword, setTemporaryPassword] = useState('')
+  const handledKakaoCodeRef = useRef(null)
 
   useEffect(() => {
     const paramMode = searchParams.get('mode')
@@ -113,6 +114,8 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
     const code = searchParams.get('code') || hashParams.get('code')
     if (!code || !code.trim()) return
+    if (handledKakaoCodeRef.current === code) return
+    handledKakaoCodeRef.current = code
 
     setIsKakaoAuthenticating(true)
     setError('')
