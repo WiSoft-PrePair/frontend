@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { motion as Motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motion'
 import { useAppState } from '../context/AppStateContext'
@@ -8,7 +8,6 @@ import logo from '../assets/logo.png'
 import '../styles/pages/Auth.css'
 import {
   getMemberByEmail,
-  getMe,
   requestSignupEmailVerification,
   verifySignupEmail,
   registerMember,
@@ -30,7 +29,7 @@ export default function AuthPage() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
 
-  const { user, login, signup, setUserFromAuthResponse, jobTracks, cadencePresets } = useAppState()
+  const { user, login, signup, jobTracks, cadencePresets } = useAppState()
   const isMobile = useMediaQuery('(max-width: 768px)')
 
   useEffect(() => {
@@ -87,8 +86,6 @@ const [showFindEmail, setShowFindEmail] = useState(false)
 const [forgotPasswordStep, setForgotPasswordStep] = useState(1) // 1: 이메일, 2: 코드, 3: 임시 비밀번호 확인
 const [forgotCode, setForgotCode] = useState('')
 const [temporaryPassword, setTemporaryPassword] = useState('')
-  const handledKakaoCodeRef = useRef(null)
-
   useEffect(() => {
     const paramMode = searchParams.get('mode')
     if (paramMode && (paramMode === 'login' || paramMode === 'signup')) {
@@ -114,14 +111,12 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
     const code = searchParams.get('code') || hashParams.get('code')
     if (!code || !code.trim()) return
-    if (handledKakaoCodeRef.current === code) return
-    handledKakaoCodeRef.current = code
 
     setIsKakaoAuthenticating(true)
     setError('')
 
     kakaoCallback({ code })
-      .then(async (response) => {
+      .then((response) => {
         const data = response?.data ?? response
 
         if (data?.isNewMember === true) {
@@ -141,35 +136,23 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           return
         }
 
-        // 기존 회원: 콜백 응답에 JWT가 있으면 즉시 로그인 (카카오 전용 계정은 비밀번호가 없을 수 있음)
-        const accessToken = data?.accessToken ?? response?.data?.accessToken
-        if (accessToken) {
-          setUserFromAuthResponse(response)
-          try {
-            const me = await getMe(accessToken)
-            setUserFromAuthResponse(me)
-          } catch {
-            /* 최소 정보는 이미 callback 응답으로 반영됨 */
-          }
-          // 로그인 상태는 상단 user 이펙트에서 redirectFrom || /mypage 로 이동
-          return
-        }
-
+        // 기존 회원: 카카오로 인증만 하고, 실제 서비스 이용 전에는 반드시 한번 더 로그인하도록 유도
         setMode('login')
         setShowEmailLogin(true)
-        setSignupSuccessMessage('')
-        setError(
-          '카카오 로그인 응답에 로그인 정보가 없습니다. 잠시 후 다시 시도하거나 관리자에게 문의해주세요.',
-        )
+        setSignupSuccessMessage('카카오 인증이 완료되었습니다. 이메일/비밀번호로 다시 로그인해주세요.')
+        // URL에서 code 제거 + 로그인 모드로 강제
         navigate('/auth?mode=login', { replace: true })
       })
       .catch((err) => {
+        setMode('login')
+        setShowEmailLogin(true)
+        setSignupSuccessMessage('')
         setError(err.message || '카카오 로그인에 실패했습니다.')
       })
       .finally(() => {
         setIsKakaoAuthenticating(false)
       })
-  }, [searchParams, navigate, setUserFromAuthResponse])
+  }, [searchParams, navigate])
 
   // Validation
   const loginValid = loginForm.email && loginForm.password
@@ -285,25 +268,24 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
-        const registerResponse = await kakaoRegister({
+        await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
           notification: 'kakao',
           frequency,
         })
         setRegistrationToken(null)
-        setUserFromAuthResponse(registerResponse)
-        const accessToken =
-          registerResponse?.data?.accessToken ?? registerResponse?.accessToken
-        if (accessToken) {
-          try {
-            const me = await getMe(accessToken)
-            setUserFromAuthResponse(me)
-          } catch {
-            /* 최소 정보는 이미 registerResponse 로 반영됨 */
-          }
-        }
-        // 로그인 상태는 상단 user 이펙트에서 redirectFrom || /mypage 로 이동
+        // 카카오 회원도 가입 후에는 반드시 다시 로그인
+        setMode('login')
+        setShowEmailLogin(true)
+        setLoginForm((prev) => ({
+          ...prev,
+          email: signupForm.email?.trim() || prev.email,
+        }))
+        setError('')
+        setSignupSuccessMessage('카카오 회원가입이 완료되었습니다. 다시 로그인해주세요.')
+        // URL 모드도 login으로 맞춰 줌
+        navigate('/auth?mode=login', { replace: true })
         return
       }
 
