@@ -8,7 +8,6 @@ import logo from '../assets/logo.png'
 import '../styles/pages/Auth.css'
 import {
   getMemberByEmail,
-  getMe,
   requestSignupEmailVerification,
   verifySignupEmail,
   registerMember,
@@ -87,6 +86,7 @@ const [showFindEmail, setShowFindEmail] = useState(false)
 const [forgotPasswordStep, setForgotPasswordStep] = useState(1) // 1: 이메일, 2: 코드, 3: 임시 비밀번호 확인
 const [forgotCode, setForgotCode] = useState('')
 const [temporaryPassword, setTemporaryPassword] = useState('')
+
   useEffect(() => {
     const paramMode = searchParams.get('mode')
     if (paramMode && (paramMode === 'login' || paramMode === 'signup')) {
@@ -113,11 +113,13 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     const code = searchParams.get('code') || hashParams.get('code')
     if (!code || !code.trim()) return
 
+    let cancelled = false
     setIsKakaoAuthenticating(true)
     setError('')
 
     kakaoCallback({ code })
-      .then(async (response) => {
+      .then((response) => {
+        if (cancelled) return
         const data = response?.data ?? response
 
         if (data?.isNewMember === true) {
@@ -134,53 +136,26 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           setShowKakaoNotificationModal(true)
           // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
           navigate('/auth?mode=signup', { replace: true })
-          return
+        } else {
+          // 기존 회원: 카카오로 인증만 하고, 실제 서비스 이용 전에는 반드시 한번 더 로그인하도록 유도
+          setMode('login')
+          setShowEmailLogin(true)
+          setSignupSuccessMessage('카카오 인증이 완료되었습니다. 이메일/비밀번호로 다시 로그인해주세요.')
+          // URL에서 code 제거 + 로그인 모드로 강제
+          navigate('/auth?mode=login', { replace: true })
         }
-
-        // 기존 회원: 콜백 응답 토큰으로 즉시 로그인
-        const accessToken = data?.accessToken ?? response?.data?.accessToken
-        if (accessToken) {
-          setUserFromAuthResponse(response)
-          try {
-            const me = await getMe(accessToken)
-            setUserFromAuthResponse(me)
-          } catch {
-            // /auth/me 실패 시에도 콜백 응답의 토큰/최소 정보로 로그인 유지
-          }
-          return
-        }
-
-        setMode('login')
-        setShowEmailLogin(true)
-        setSignupSuccessMessage('')
-        setError('카카오 로그인 응답에 로그인 정보가 없습니다. 잠시 후 다시 시도해주세요.')
-        navigate('/auth?mode=login', { replace: true })
       })
       .catch((err) => {
-        const message = err?.message || '카카오 로그인에 실패했습니다.'
-        const isMemberNotFound =
-          err?.statusCode === 400 && /회원 정보를 찾을 수 없습니다/.test(message)
-
-        if (isMemberNotFound) {
-          // 백엔드에서 미가입 카카오 계정으로 판단한 경우 회원가입 플로우로 유도
-          setMode('signup')
-          setAuthMethod(null)
-          setShowEmailLogin(false)
-          setSignupSuccessMessage('')
-          setError('아직 카카오 회원가입이 완료되지 않았습니다. "카카오톡으로 시작하기"로 가입을 진행해주세요.')
-          navigate('/auth?mode=signup', { replace: true })
-          return
+        if (!cancelled) {
+          setError(err.message || '카카오 로그인에 실패했습니다.')
         }
-
-        setMode('login')
-        setShowEmailLogin(true)
-        setSignupSuccessMessage('')
-        setError(message)
       })
       .finally(() => {
-        setIsKakaoAuthenticating(false)
+        if (!cancelled) setIsKakaoAuthenticating(false)
       })
-  }, [searchParams, navigate, setUserFromAuthResponse])
+
+    return () => { cancelled = true }
+  }, [searchParams, navigate])
 
   // Validation
   const loginValid = loginForm.email && loginForm.password
@@ -205,12 +180,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       await login({ email: loginForm.email, password: loginForm.password })
       navigate(redirectFrom || '/mypage', { replace: true })
     } catch (err) {
-      const base = err.message || '로그인에 실패했습니다.'
-      const kakaoHint =
-        err.statusCode === 401
-          ? ' 카카오로 가입한 계정은 서비스에 비밀번호가 없을 수 있습니다. 아래에서 "카카오톡으로 로그인"을 이용해 주세요.'
-          : ''
-      setError(`${base}${kakaoHint}`)
+      setError(err.message || '로그인에 실패했습니다.')
     } finally {
       setIsLoading(false)
     }
@@ -296,6 +266,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
+        // POST /api/auth/kakao/register — 명세: registrationToken, job, notification, frequency 만 (예: notification "kakao")
         await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
@@ -343,7 +314,8 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setActiveStep((prev) => Math.max(prev - 1, 0))
   }
 
-  // 카카오 OAuth 시작: 백엔드 /api/auth/kakao/url?prompt=login → 전달받은 url 로만 리다이렉트
+  // 카카오 OAuth 시작: 프론트는 카카오와 직접 통신하지 않고,
+  // 백엔드 /api/auth/kakao/url?prompt=login → 전달받은 url 로만 리다이렉트합니다.
   const handleKakaoAuth = async () => {
     setError('')
     setIsKakaoAuthenticating(true)
@@ -383,7 +355,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setActiveStep(0) // Step 1로 이동 (기본 정보는 이미 채워짐)
   }
 
-  // 로그인용 카카오 OAuth
+  // 로그인용 카카오 OAuth (동일 prompt-login 사용, prompt=login)
   const handleKakaoLogin = () => {
     setError('')
     setIsKakaoAuthenticating(true)
@@ -616,11 +588,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
 
                   <div className="form-group">
                     <label className="form-label">이름</label>
-                    {authMethod === 'kakao' && (
-                      <p className="form-helper auth__name-hint">
-                        서비스(헤더, 면접 안내 등)에 표시됩니다. 카카오 프로필과 다르게 입력할 수 있어요.
-                      </p>
-                    )}
                     <input
                       type="text"
                       className="form-input"
@@ -922,20 +889,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
 
               {showEmailLogin && (
                 <>
-                  <p className="auth__login-email-hint" role="note">
-                    카카오로 가입하셨다면 이메일·비밀번호 대신{' '}
-                    <button
-                      type="button"
-                      className="auth__login-email-hint-link"
-                      onClick={() => {
-                        setShowEmailLogin(false)
-                        setError('')
-                      }}
-                    >
-                      카카오톡으로 로그인
-                    </button>
-                    을 눌러 주세요.
-                  </p>
                   <div className="form-group">
                     <label className="form-label">이메일</label>
                     <input

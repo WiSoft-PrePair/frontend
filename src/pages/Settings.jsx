@@ -382,17 +382,11 @@ export default function SettingsPage() {
             <div className="settings__form">
               <div className="form-group">
                 <label className="form-label">이름</label>
-                {!form.name?.trim() && (
-                  <p className="form-helper">
-                    카카오 등으로 가입 시 비어 있을 수 있어요. 헤더·면접 안내에 쓰일 이름을 입력해 주세요.
-                  </p>
-                )}
                 <input
                   type="text"
                   className="form-input"
                   value={form.name}
                   onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="표시할 이름"
                 />
               </div>
 

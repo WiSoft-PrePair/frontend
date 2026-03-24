@@ -8,26 +8,13 @@
 
 const API_BASE = '/api'
 
-/** BE가 { message } 또는 { error: { message } } 등으로 내려줄 때 공통 추출 */
-function parseApiErrorMessage(errorData) {
-  if (!errorData || typeof errorData !== 'object') return undefined
-  return (
-    errorData.message ??
-    errorData.error?.message ??
-    (typeof errorData.error === 'string' ? errorData.error : undefined)
-  )
-}
-
 // 에러 처리 헬퍼
 async function handleResponse(response) {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
-    const message =
-      parseApiErrorMessage(errorData) || '요청 처리 중 오류가 발생했습니다.'
-    const error = new Error(message)
+    const error = new Error(errorData.message || '요청 처리 중 오류가 발생했습니다.')
     error.statusCode = response.status
     error.isServerError = response.status >= 500
-    error.code = errorData.error?.code
     throw error
   }
   return response.json()
@@ -171,10 +158,9 @@ export async function refreshToken(payload) {
 }
 
 /**
- * OAuth 카카오 로그인/회원가입 시작
- * GET /api/auth/kakao/url?prompt=...
- * - login: 기존 회원 로그인
- * - signup: 신규 회원가입(콜백에서 registrationToken 등) — BE 스펙에 맞게 값 조정 가능
+ * OAuth 카카오 로그인/회원가입 시작 (prompt-login)
+ * 백엔드가 카카오 인증 URL을 생성해주면, 프론트는 해당 URL로만 리다이렉트합니다.
+ * 예: GET /api/auth/kakao/url?prompt=login → { data: { url: 'https://kauth.kakao.com/...' } }
  */
 export async function kakaoPromptLogin(prompt = 'login') {
   try {
@@ -192,10 +178,7 @@ export async function kakaoPromptLogin(prompt = 'login') {
   }
 }
 
-/**
- * OAuth 로그인 및 회원가입 (카카오 콜백) | POST /api/auth/kakao/callback
- * Body: { code, prompt? } — BE가 콜백에서 신규/기존 분기 시 prompt 를 쓰는 경우
- */
+/** OAuth 로그인 및 회원가입 (카카오 콜백) | POST /api/auth/kakao/callback */
 export async function kakaoCallback(payload) {
   try {
     const response = await fetch(`${API_BASE}/auth/kakao/callback`, {
@@ -212,7 +195,7 @@ export async function kakaoCallback(payload) {
 
 /**
  * OAuth 회원가입 (카카오) | POST /api/auth/kakao/register
- * Body: { registrationToken, job, notification, frequency, nickname? }
+ * Body: { registrationToken, job, notification, frequency } — 예: notification "kakao", frequency "every"|"weekly"
  */
 export async function kakaoRegister(payload) {
   try {
