@@ -1,15 +1,18 @@
 import { useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useAppState } from '../context/AppStateContext'
+import { kakaoCallback } from '../utils/memberApi'
+
+const KAKAO_PENDING_SIGNUP_KEY = 'kakao_pending_signup'
 
 /**
  * 카카오 OAuth redirect_uri 로 들어오는 콜백 전용 라우트입니다.
- * 배포 환경에서 /auth/kakao/callback 경로가 index.html 로 서빙되더라도
- * 라우팅/전환 라이브러리 영향으로 '*' 라우트로 튕기는 케이스를 줄이기 위해,
- * 들어오는 즉시 /auth 로 code 를 옮겨 태웁니다.
+ * code를 /auth 쿼리로 옮기지 않고, 여기서 즉시 callback API를 호출합니다.
  */
 export default function KakaoCallbackRedirect() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const { setUserFromAuthResponse } = useAppState()
 
   useEffect(() => {
     const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
@@ -19,7 +22,6 @@ export default function KakaoCallbackRedirect() {
       searchParams.get('error_description') || hashParams.get('error_description')
 
     if (error) {
-      // 카카오가 error를 내려주는 케이스도 /auth에서 통일 처리
       const params = new URLSearchParams()
       params.set('mode', 'login')
       params.set('oauthError', error)
@@ -28,21 +30,42 @@ export default function KakaoCallbackRedirect() {
       return
     }
 
-    if (code && code.trim()) {
-      const params = new URLSearchParams()
-      params.set('mode', 'signup')
-      params.set('code', code.trim())
-      // 카카오가 내려준 state — 백엔드가 authorize 시 세션/CSRF에 쓴 경우 콜백 POST에 그대로 넘겨야 함
-      const state = searchParams.get('state') || hashParams.get('state')
-      if (state) params.set('state', state)
-      navigate(`/auth?${params.toString()}`, { replace: true })
+    if (!code || !code.trim()) {
+      navigate('/auth?mode=login', { replace: true })
       return
     }
 
-    navigate('/auth?mode=login', { replace: true })
-  }, [navigate, searchParams])
+    let cancelled = false
+    kakaoCallback({ code: code.trim() })
+      .then((response) => {
+        if (cancelled) return
+        const data = response?.data ?? response
+        if (data?.isNewMember) {
+          const pendingSignup = {
+            registrationToken: data.registrationToken ?? null,
+            prefilledData: data.prefilledData ?? {},
+          }
+          sessionStorage.setItem(KAKAO_PENDING_SIGNUP_KEY, JSON.stringify(pendingSignup))
+          navigate('/auth?mode=signup', { replace: true })
+          return
+        }
 
-  // 화면이 잠깐 보일 수 있으니 최소한의 fallback 렌더
+        setUserFromAuthResponse(response)
+        navigate('/mypage', { replace: true })
+      })
+      .catch((callbackError) => {
+        if (cancelled) return
+        const params = new URLSearchParams()
+        params.set('mode', 'login')
+        params.set('oauthError', 'kakao_callback_failed')
+        if (callbackError?.message) {
+          params.set('oauthErrorDescription', callbackError.message)
+        }
+        navigate(`/auth?${params.toString()}`, { replace: true })
+      })
+
+    return () => { cancelled = true }
+  }, [navigate, searchParams, setUserFromAuthResponse])
+
   return null
 }
-

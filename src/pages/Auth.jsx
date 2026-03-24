@@ -14,12 +14,10 @@ import {
   requestPasswordResetEmail,
   resetPassword as resetPasswordApi,
   kakaoPromptLogin,
-  kakaoCallback,
   kakaoRegister,
 } from '../utils/memberApi'
 
-/** 동일 JS 로드 세션에서 카카오 OAuth code 중복 교환 방지 (Strict Mode 이중 effect 등) */
-const processedKakaoOAuthCodes = new Set()
+const KAKAO_PENDING_SIGNUP_KEY = 'kakao_pending_signup'
 
 const steps = [
   { id: 'account', label: '기본 정보' },
@@ -110,56 +108,31 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     navigate('/auth?mode=login', { replace: true })
   }, [searchParams, navigate])
 
-  // 카카오 OAuth 콜백: URL에 code가 있으면 callback API 호출 후 신규/기존 회원 분기
+  // 카카오 OAuth 콜백에서 저장한 신규 가입 데이터(sessionStorage) 반영
   useEffect(() => {
-    const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
-    const code = searchParams.get('code') || hashParams.get('code')
-    if (!code || !code.trim()) return
+    const rawPending = sessionStorage.getItem(KAKAO_PENDING_SIGNUP_KEY)
+    if (!rawPending) return
 
-    const trimmed = code.trim()
-    // 인가 코드는 1회용 — 동일 code로 POST가 두 번 나가면 두 번째가 400(회원 정보 없음 등)이 될 수 있음
-    if (processedKakaoOAuthCodes.has(trimmed)) return
-    processedKakaoOAuthCodes.add(trimmed)
+    try {
+      const parsed = JSON.parse(rawPending)
+      const token = parsed?.registrationToken
+      const prefilled = parsed?.prefilledData ?? {}
+      if (!token) return
 
-    const modeParam = searchParams.get('mode') === 'login' ? 'login' : 'signup'
-    // 콜백 요청 전에 URL에서 code 제거 → 재실행 시 effect가 다시 POST하지 않음
-    navigate(`/auth?mode=${modeParam}`, { replace: true })
-
-    setIsKakaoAuthenticating(true)
-    setError('')
-
-    // 명세: /api/auth/kakao/callback 은 OAuth code만 전달
-    kakaoCallback({ code: trimmed })
-      .then((response) => {
-        const data = response?.data ?? response
-
-        if (data?.isNewMember === true) {
-          // 신규 가입자 → 카카오 정보(prefilledData)를 들고 회원가입 화면으로 이동
-          const token = data.registrationToken
-          const prefilled = data.prefilledData ?? {}
-          setRegistrationToken(token)
-          setKakaoAuthData({
-            name: prefilled.nickname ?? '',
-            email: prefilled.email ?? '',
-          })
-          setMode('signup')
-          setAuthMethod('kakao')
-          setShowKakaoNotificationModal(true)
-          navigate('/auth?mode=signup', { replace: true })
-        } else {
-          // 기존 회원: callback 응답 토큰/회원정보로 즉시 로그인 처리 후 마이페이지 이동
-          setUserFromAuthResponse(response)
-          navigate(redirectFrom || '/mypage', { replace: true })
-        }
+      setRegistrationToken(token)
+      setKakaoAuthData({
+        name: prefilled.nickname ?? '',
+        email: prefilled.email ?? '',
       })
-      .catch((err) => {
-        processedKakaoOAuthCodes.delete(trimmed)
-        setError(err.message || '카카오 로그인에 실패했습니다.')
-      })
-      .finally(() => {
-        setIsKakaoAuthenticating(false)
-      })
-  }, [searchParams, navigate])
+      setMode('signup')
+      setAuthMethod('kakao')
+      setShowKakaoNotificationModal(true)
+    } catch {
+      // no-op
+    } finally {
+      sessionStorage.removeItem(KAKAO_PENDING_SIGNUP_KEY)
+    }
+  }, [])
 
   // Validation
   const loginValid = loginForm.email && loginForm.password
