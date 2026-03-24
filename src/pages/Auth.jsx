@@ -117,7 +117,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     if (!code || !code.trim()) return
 
     const trimmed = code.trim()
-    const oauthState = searchParams.get('state') || hashParams.get('state')
     // 인가 코드는 1회용 — 동일 code로 POST가 두 번 나가면 두 번째가 400(회원 정보 없음 등)이 될 수 있음
     if (processedKakaoOAuthCodes.has(trimmed)) return
     processedKakaoOAuthCodes.add(trimmed)
@@ -129,14 +128,8 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setIsKakaoAuthenticating(true)
     setError('')
 
-    // 토큰 교환 시 Kakao에 보내는 redirect_uri는 authorize 요청·카카오 콘솔에 등록된 값과 문자 하나까지 동일해야 함
-    const redirectUri = `${window.location.origin}/auth/kakao/callback`
-    kakaoCallback({
-      code: trimmed,
-      redirectUri,
-      redirect_uri: redirectUri,
-      ...(oauthState ? { state: oauthState } : {}),
-    })
+    // 명세: /api/auth/kakao/callback 은 OAuth code만 전달
+    kakaoCallback({ code: trimmed })
       .then((response) => {
         const data = response?.data ?? response
 
@@ -154,11 +147,9 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           setShowKakaoNotificationModal(true)
           navigate('/auth?mode=signup', { replace: true })
         } else {
-          // 기존 회원: 카카오로 인증만 하고, 실제 서비스 이용 전에는 반드시 한번 더 로그인하도록 유도
-          setMode('login')
-          setShowEmailLogin(true)
-          setSignupSuccessMessage('카카오 인증이 완료되었습니다. 이메일/비밀번호로 다시 로그인해주세요.')
-          navigate('/auth?mode=login', { replace: true })
+          // 기존 회원: callback 응답 토큰/회원정보로 즉시 로그인 처리 후 마이페이지 이동
+          setUserFromAuthResponse(response)
+          navigate(redirectFrom || '/mypage', { replace: true })
         }
       })
       .catch((err) => {
@@ -280,14 +271,22 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
         // POST /api/auth/kakao/register — 명세: registrationToken, job, notification, frequency 만 (예: notification "kakao")
-        await kakaoRegister({
+        const registerResponse = await kakaoRegister({
           registrationToken,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
           notification: 'kakao',
           frequency,
         })
         setRegistrationToken(null)
-        // 카카오 회원도 가입 후에는 반드시 다시 로그인
+
+        // 명세 선호: 신규 가입 완료 후 즉시 서비스 진입 (토큰 미반환 시에만 로그인 화면 fallback)
+        const registerData = registerResponse?.data ?? registerResponse
+        if (registerData?.accessToken || registerData?.member_info || registerData?.user) {
+          setUserFromAuthResponse(registerResponse)
+          navigate(redirectFrom || '/mypage', { replace: true })
+          return
+        }
+
         setMode('login')
         setShowEmailLogin(true)
         setLoginForm((prev) => ({
@@ -295,8 +294,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           email: signupForm.email?.trim() || prev.email,
         }))
         setError('')
-        setSignupSuccessMessage('카카오 회원가입이 완료되었습니다. 다시 로그인해주세요.')
-        // URL 모드도 login으로 맞춰 줌
+        setSignupSuccessMessage('카카오 회원가입이 완료되었습니다. 로그인해주세요.')
         navigate('/auth?mode=login', { replace: true })
         return
       }
