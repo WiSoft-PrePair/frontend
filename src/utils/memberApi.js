@@ -8,11 +8,23 @@
 
 const API_BASE = '/api'
 
+function pickApiErrorMessage(errorData) {
+  if (!errorData || typeof errorData !== 'object') return null
+  if (typeof errorData.message === 'string' && errorData.message) return errorData.message
+  const nested = errorData.error
+  if (nested && typeof nested === 'object' && typeof nested.message === 'string' && nested.message) {
+    return nested.message
+  }
+  if (typeof nested === 'string' && nested) return nested
+  return null
+}
+
 // 에러 처리 헬퍼
 async function handleResponse(response) {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
-    const error = new Error(errorData.message || '요청 처리 중 오류가 발생했습니다.')
+    const msg = pickApiErrorMessage(errorData) || '요청 처리 중 오류가 발생했습니다.'
+    const error = new Error(msg)
     error.statusCode = response.status
     error.isServerError = response.status >= 500
     throw error
@@ -178,7 +190,12 @@ export async function kakaoPromptLogin(prompt = 'login') {
   }
 }
 
-/** OAuth 로그인 및 회원가입 (카카오 콜백) | POST /api/auth/kakao/callback */
+/**
+ * OAuth 로그인 및 회원가입 (카카오 콜백) | POST /api/auth/kakao/callback
+ * @param {{ code: string, redirectUri?: string, redirect_uri?: string, state?: string }} payload
+ *   - redirectUri / redirect_uri: authorize·카카오 콘솔에 등록된 값과 동일 (보통 {origin}/auth/kakao/callback)
+ *   - state: 카카오가 돌려준 state (백엔드가 세션 검증에 쓰는 경우 필수)
+ */
 export async function kakaoCallback(payload) {
   try {
     const response = await fetch(`${API_BASE}/auth/kakao/callback`, {

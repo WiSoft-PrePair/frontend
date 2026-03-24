@@ -18,6 +18,9 @@ import {
   kakaoRegister,
 } from '../utils/memberApi'
 
+/** 동일 JS 로드 세션에서 카카오 OAuth code 중복 교환 방지 (Strict Mode 이중 effect 등) */
+const processedKakaoOAuthCodes = new Set()
+
 const steps = [
   { id: 'account', label: '기본 정보' },
   { id: 'job', label: '목표 직무' },
@@ -113,13 +116,28 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     const code = searchParams.get('code') || hashParams.get('code')
     if (!code || !code.trim()) return
 
-    let cancelled = false
+    const trimmed = code.trim()
+    const oauthState = searchParams.get('state') || hashParams.get('state')
+    // 인가 코드는 1회용 — 동일 code로 POST가 두 번 나가면 두 번째가 400(회원 정보 없음 등)이 될 수 있음
+    if (processedKakaoOAuthCodes.has(trimmed)) return
+    processedKakaoOAuthCodes.add(trimmed)
+
+    const modeParam = searchParams.get('mode') === 'login' ? 'login' : 'signup'
+    // 콜백 요청 전에 URL에서 code 제거 → 재실행 시 effect가 다시 POST하지 않음
+    navigate(`/auth?mode=${modeParam}`, { replace: true })
+
     setIsKakaoAuthenticating(true)
     setError('')
 
-    kakaoCallback({ code })
+    // 토큰 교환 시 Kakao에 보내는 redirect_uri는 authorize 요청·카카오 콘솔에 등록된 값과 문자 하나까지 동일해야 함
+    const redirectUri = `${window.location.origin}/auth/kakao/callback`
+    kakaoCallback({
+      code: trimmed,
+      redirectUri,
+      redirect_uri: redirectUri,
+      ...(oauthState ? { state: oauthState } : {}),
+    })
       .then((response) => {
-        if (cancelled) return
         const data = response?.data ?? response
 
         if (data?.isNewMember === true) {
@@ -134,27 +152,22 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           setMode('signup')
           setAuthMethod('kakao')
           setShowKakaoNotificationModal(true)
-          // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
           navigate('/auth?mode=signup', { replace: true })
         } else {
           // 기존 회원: 카카오로 인증만 하고, 실제 서비스 이용 전에는 반드시 한번 더 로그인하도록 유도
           setMode('login')
           setShowEmailLogin(true)
           setSignupSuccessMessage('카카오 인증이 완료되었습니다. 이메일/비밀번호로 다시 로그인해주세요.')
-          // URL에서 code 제거 + 로그인 모드로 강제
           navigate('/auth?mode=login', { replace: true })
         }
       })
       .catch((err) => {
-        if (!cancelled) {
-          setError(err.message || '카카오 로그인에 실패했습니다.')
-        }
+        processedKakaoOAuthCodes.delete(trimmed)
+        setError(err.message || '카카오 로그인에 실패했습니다.')
       })
       .finally(() => {
-        if (!cancelled) setIsKakaoAuthenticating(false)
+        setIsKakaoAuthenticating(false)
       })
-
-    return () => { cancelled = true }
   }, [searchParams, navigate])
 
   // Validation

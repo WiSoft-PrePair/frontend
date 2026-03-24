@@ -32,6 +32,9 @@ export default function KakaoCallbackRedirect() {
       const params = new URLSearchParams()
       params.set('mode', 'signup')
       params.set('code', code.trim())
+      // 카카오가 내려준 state — 백엔드가 authorize 시 세션/CSRF에 쓴 경우 콜백 POST에 그대로 넘겨야 함
+      const state = searchParams.get('state') || hashParams.get('state')
+      if (state) params.set('state', state)
       navigate(`/auth?${params.toString()}`, { replace: true })
       return
     }
