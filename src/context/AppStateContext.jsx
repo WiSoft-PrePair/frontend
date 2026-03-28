@@ -14,10 +14,11 @@ import * as memberApi from '../utils/memberApi'
 
 const AppStateContext = createContext(null)
 
-// 로컬 스토리지 키
+// 세션 스토리지 키 (브라우저 탭/창을 닫으면 로그인 상태 해제)
 const STORAGE_KEY = 'prepair_user'
 const STORAGE_ACCESS_TOKEN_KEY = 'prepair_access_token'
 const STORAGE_REFRESH_TOKEN_KEY = 'prepair_refresh_token'
+const authStorage = sessionStorage
 const STORAGE_HISTORY_KEY = 'prepair_history'
 const STORAGE_COMPANY_HISTORY_KEY = 'prepair_company_history'
 const STORAGE_ACTIVITY_KEY = 'prepair_activity'
@@ -27,7 +28,7 @@ const STORAGE_PRO_USAGE_KEY = 'prepair_pro_usage'
 export function AppProvider({children}) {
   const [user, setUser] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY)
+      const saved = authStorage.getItem(STORAGE_KEY)
       return saved ? JSON.parse(saved) : null
     } catch {
       return null
@@ -105,9 +106,9 @@ export function AppProvider({children}) {
   // 사용자 상태 저장
   useEffect(() => {
     if (user) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(user))
+      authStorage.setItem(STORAGE_KEY, JSON.stringify(user))
     } else {
-      localStorage.removeItem(STORAGE_KEY)
+      authStorage.removeItem(STORAGE_KEY)
     }
   }, [user])
 
@@ -117,15 +118,22 @@ export function AppProvider({children}) {
   const normalizeUser = useCallback((apiUser) => {
     if (!apiUser) return null
 
-    // 백엔드 notification(email | kakao | BOTH) → FE boolean 플래그로 변환
+    // 백엔드 notification(email | kakao | BOTH) → FE 채널 체크 상태 (소문자 both 는 구버전 호환)
     const rawNotification =
       apiUser.notification ??
       apiUser.notificationKakao ??
       apiUser.notification_kakao
-    const notificationKakao =
-      rawNotification === 'kakao' ||
-      rawNotification === 'BOTH' ||
-      rawNotification === 'both'
+    const n =
+      rawNotification == null || rawNotification === ''
+        ? ''
+        : String(rawNotification).toLowerCase()
+    const isBoth = rawNotification === 'BOTH' || n === 'both'
+    let notificationKakao = n === 'kakao' || isBoth
+    let notificationEmail = n === 'email' || isBoth
+    if (rawNotification == null || rawNotification === '') {
+      notificationEmail = true
+      notificationKakao = false
+    }
 
     // 백엔드 frequency(weekly | every) → 기존 cadence 필드에 매핑
     const rawFrequency =
@@ -153,6 +161,7 @@ export function AppProvider({children}) {
       jobRole: apiUser.job ?? apiUser.jobRole ?? apiUser.job_role ?? '',
       cadence,
       notificationKakao,
+      notificationEmail,
       plan,
     }
   }, [])
@@ -198,10 +207,10 @@ export function AppProvider({children}) {
     const userData = normalizeUser(apiUser)
     setUser(userData)
     if (accessToken) {
-      localStorage.setItem(STORAGE_ACCESS_TOKEN_KEY, accessToken)
+      authStorage.setItem(STORAGE_ACCESS_TOKEN_KEY, accessToken)
     }
     if (refreshToken) {
-      localStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, refreshToken)
+      authStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, refreshToken)
     }
     return userData
   }, [normalizeUser])
@@ -212,15 +221,8 @@ export function AppProvider({children}) {
     const cadenceId = formData.cadence?.id ?? formData.cadence
     const frequency = cadenceId === 'weekly' ? 'weekly' : 'every'
 
-    // 알림 채널(email | kakao | BOTH | both)
-    // - 이메일 회원가입: 기본 email, 카카오 알림 선택 시 BOTH
-    // - 카카오 OAuth(registerMember 경로): both = 이메일+카카오톡, 미선택 시 email
-    let notification = 'email'
-    if (formData.authMethod === 'kakao') {
-      notification = formData.notificationKakao ? 'both' : 'email'
-    } else {
-      notification = formData.notificationKakao ? 'BOTH' : 'email'
-    }
+    // 알림 채널: email | kakao | BOTH (카카오톡까지 선택 시 BOTH)
+    const notification = formData.notificationKakao ? 'BOTH' : 'email'
 
     const payload = {
       email: formData.email?.trim(),
@@ -249,18 +251,18 @@ export function AppProvider({children}) {
     const userData = normalizeUser(apiUser)
     setUser(userData)
     if (accessToken) {
-      localStorage.setItem(STORAGE_ACCESS_TOKEN_KEY, accessToken)
+      authStorage.setItem(STORAGE_ACCESS_TOKEN_KEY, accessToken)
     }
     if (refreshToken) {
-      localStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, refreshToken)
+      authStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, refreshToken)
     }
   }, [normalizeUser])
 
   // 로그아웃 (백엔드 API + 로컬 상태 정리)
   const logout = useCallback(async () => {
     setIsLoggingOut(true)
-    const accessToken = localStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
-    const refreshToken = localStorage.getItem(STORAGE_REFRESH_TOKEN_KEY)
+    const accessToken = authStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
+    const refreshToken = authStorage.getItem(STORAGE_REFRESH_TOKEN_KEY)
 
     try {
       if (accessToken || refreshToken) {
@@ -275,9 +277,9 @@ export function AppProvider({children}) {
       setUser(null)
       setCurrentQuestion(null)
       setLastFeedback(null)
-      localStorage.removeItem(STORAGE_KEY)
-      localStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
-      localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
+      authStorage.removeItem(STORAGE_KEY)
+      authStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
+      authStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
       setIsLoggingOut(false)
     }
   }, [])
@@ -285,7 +287,7 @@ export function AppProvider({children}) {
   // 회원 탈퇴 (백엔드 API + 로컬 상태/히스토리 정리)
   const deleteAccount = useCallback(async () => {
     setIsLoggingOut(true)
-    const accessToken = localStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
+    const accessToken = authStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
 
     try {
       if (accessToken) {
@@ -302,9 +304,9 @@ export function AppProvider({children}) {
       setScoreHistory([])
       setActivity(getMockActivity())
       setPurchases([])
-      localStorage.removeItem(STORAGE_KEY)
-      localStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
-      localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
+      authStorage.removeItem(STORAGE_KEY)
+      authStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
+      authStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
       localStorage.removeItem(STORAGE_HISTORY_KEY)
       localStorage.removeItem(STORAGE_ACTIVITY_KEY)
       localStorage.removeItem(STORAGE_PURCHASES_KEY)
@@ -551,7 +553,14 @@ export function AppProvider({children}) {
   }, [])
 
   const getAccessToken = useCallback(() => {
-    return localStorage.getItem(STORAGE_ACCESS_TOKEN_KEY) || null
+    return authStorage.getItem(STORAGE_ACCESS_TOKEN_KEY) || null
+  }, [])
+
+  // 예전 버전에서 localStorage에 남은 인증 키는 제거 (세션 전환 후 혼선 방지)
+  useEffect(() => {
+    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
+    localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
   }, [])
 
   const value = {

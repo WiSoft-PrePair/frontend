@@ -47,8 +47,8 @@ export default function SettingsPage() {
     email: user?.email || '',
     jobRole: user?.jobRole || '',
     cadence: user?.cadence || 'daily',
-    notificationEmail: true,
-    notificationKakao: user?.notificationKakao || false,
+    notificationEmail: user?.notificationEmail !== false,
+    notificationKakao: !!user?.notificationKakao,
   })
   const [isSaving, setIsSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -72,15 +72,14 @@ export default function SettingsPage() {
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false)
   const [passwordMessage, setPasswordMessage] = useState({ type: '', text: '' })
 
-  // Settings 진입 시 서버의 최신 회원 정보를 한 번 동기화
+  // Settings 진입 시 서버의 최신 회원 정보를 한 번 동기화 (알림 채널 등 캐시와 불일치 방지)
   useEffect(() => {
     const fetchProfile = async () => {
       try {
         setIsLoadingProfile(true)
         const accessToken = getAccessToken?.()
+        if (!accessToken) return
         const me = await getMe(accessToken)
-        // BE 래퍼: { statusCode, data, message } 형태를 가정
-        // AppStateContext의 정규화 로직을 그대로 사용해 user 상태를 갱신
         setUserFromAuthResponse(me)
       } catch (error) {
         console.error('[Settings] getMe error:', error)
@@ -89,12 +88,8 @@ export default function SettingsPage() {
       }
     }
 
-    // 로그인 후라면 user가 이미 있을 수 있지만,
-    // 새로고침 등으로 초기화된 경우를 대비해 한 번 호출
-    if (!user) {
-      fetchProfile()
-    }
-  }, [user, getAccessToken, setUserFromAuthResponse])
+    fetchProfile()
+  }, [getAccessToken, setUserFromAuthResponse])
 
   // user 상태가 바뀌면 폼에 회원 정보 반영
   useEffect(() => {
@@ -105,7 +100,8 @@ export default function SettingsPage() {
       email: user.email || '',
       jobRole: user.jobRole || '',
       cadence: user.cadence || 'daily',
-      notificationKakao: user.notificationKakao || false,
+      notificationEmail: user.notificationEmail !== false,
+      notificationKakao: !!user.notificationKakao,
     }))
 
     // 프로필 동기화 시 기본 이메일도 갱신
@@ -153,17 +149,7 @@ export default function SettingsPage() {
 
         const updated = await updateMember(accessToken, payload)
 
-        // 백엔드 응답을 AppStateContext 정규화 로직을 통해 반영
         setUserFromAuthResponse({ user: updated })
-
-        // 로컬 폼 상태도 동기화
-        updateProfile({
-          name: updated.nickname ?? form.name,
-          email: updated.email ?? form.email,
-          jobRole: updated.job ?? form.jobRole,
-          cadence: form.cadence,
-          notificationKakao: updated.notificationKakao ?? form.notificationKakao,
-        })
 
         // 카카오톡 알림을 새로 활성화한 경우, 카카오 링크 인증 플로우 시작
         if (shouldLinkKakao) {

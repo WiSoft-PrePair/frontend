@@ -210,7 +210,9 @@ export async function kakaoCallback(payload) {
 
 /**
  * OAuth 회원가입 (카카오) | POST /api/auth/kakao/register
- * Body: { registrationToken, job, notification, frequency } — 예: notification "kakao", frequency "every"|"weekly"
+ * Body: { registrationToken, nickname?, job, notification, frequency }
+ * notification: "email" | "kakao" | "BOTH"
+ * frequency: "weekly" | "every"
  */
 export async function kakaoRegister(payload) {
   try {

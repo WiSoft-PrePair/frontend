@@ -11,13 +11,16 @@ import {
   getMe,
   requestSignupEmailVerification,
   verifySignupEmail,
-  registerMember,
   requestPasswordResetEmail,
   resetPassword as resetPasswordApi,
   kakaoPromptLogin,
   kakaoCallback,
   kakaoRegister,
 } from '../utils/memberApi'
+import {
+  KAKAO_OAUTH_INTENT_KEY,
+  KAKAO_PENDING_SIGNUP_KEY,
+} from '../constants/kakaoAuthSession'
 
 const steps = [
   { id: 'account', label: '기본 정보' },
@@ -54,8 +57,6 @@ export default function AuthPage() {
   // 카카오 인증 관련 상태
   const [authMethod, setAuthMethod] = useState(null) // null | 'kakao' | 'email'
   const [isKakaoAuthenticating, setIsKakaoAuthenticating] = useState(false)
-  const [showKakaoNotificationModal, setShowKakaoNotificationModal] = useState(false)
-  const [kakaoAuthData, setKakaoAuthData] = useState(null) // { name, email } (prefilledData)
   const [registrationToken, setRegistrationToken] = useState(null) // 카카오 신규 회원 시 회원가입 완료용
   const [showEmailLogin, setShowEmailLogin] = useState(false) // 이메일 로그인 폼 표시 여부
   const [signupSuccessMessage, setSignupSuccessMessage] = useState('') // 회원가입 완료 후 안내
@@ -96,6 +97,31 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     }
   }, [searchParams])
 
+  // 카카오 콜백 라우트에서 전달된 오류 코드 (?kakaoError=)
+  useEffect(() => {
+    const kakaoError = searchParams.get('kakaoError')
+    if (!kakaoError) return
+
+    if (kakaoError === 'already_member') {
+      setError('이미 존재하는 회원입니다. 카카오로 로그인을 진행해주세요.')
+      setMode('signup')
+      setAuthMethod(null)
+    } else if (kakaoError === 'not_member') {
+      setError('존재하지 않는 회원입니다. 회원가입을 진행해주세요.')
+      setMode('login')
+      setShowEmailLogin(false)
+    } else if (kakaoError === 'no_token') {
+      setError('카카오 로그인 응답에 로그인 정보가 없습니다. 잠시 후 다시 시도해주세요.')
+      setMode('login')
+      setShowEmailLogin(true)
+    }
+
+    const next = new URLSearchParams(searchParams)
+    next.delete('kakaoError')
+    const qs = next.toString()
+    navigate(qs ? `/auth?${qs}` : '/auth', { replace: true })
+  }, [searchParams, navigate])
+
   // OAuth 에러가 쿼리로 넘어오면 안내
   useEffect(() => {
     const oauthError = searchParams.get('oauthError')
@@ -107,7 +133,34 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     navigate('/auth?mode=login', { replace: true })
   }, [searchParams, navigate])
 
-  // 카카오 OAuth 콜백: URL에 code가 있으면 callback API 호출 후 신규/기존 회원 분기
+  // /auth/kakao/callback 이 아닌 경로로 돌아온 경우, sessionStorage 에 저장된 카카오 가입 대기 데이터 복원
+  useEffect(() => {
+    if (searchParams.get('mode') !== 'signup') return
+    try {
+      const raw = sessionStorage.getItem(KAKAO_PENDING_SIGNUP_KEY)
+      if (!raw) return
+      sessionStorage.removeItem(KAKAO_PENDING_SIGNUP_KEY)
+      const { registrationToken: token, prefilledData } = JSON.parse(raw)
+      const prefilled = prefilledData ?? {}
+      const pw = prefilled.password ?? ''
+      if (token) setRegistrationToken(token)
+      setSignupForm((prev) => ({
+        ...prev,
+        name: prefilled.nickname ?? prev.name ?? '',
+        email: prefilled.email ?? prev.email ?? '',
+        password: pw,
+        passwordConfirm: pw,
+        notificationKakao: true,
+        authMethod: 'kakao',
+      }))
+      setAuthMethod('kakao')
+      setActiveStep(0)
+    } catch (e) {
+      console.error(e)
+    }
+  }, [searchParams])
+
+  // 카카오 OAuth 콜백: URL에 code가 있으면 callback API 호출 후 신규/기존 회원 분기 (랜딩 등 레거시 redirect 대응)
   useEffect(() => {
     const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
     const code = searchParams.get('code') || hashParams.get('code')
@@ -116,30 +169,53 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setIsKakaoAuthenticating(true)
     setError('')
 
+    const intent = sessionStorage.getItem(KAKAO_OAUTH_INTENT_KEY) || 'login'
+
     kakaoCallback({ code })
       .then(async (response) => {
         const data = response?.data ?? response
 
         if (data?.isNewMember === true) {
-          // 신규 가입자 → 카카오 정보(prefilledData)를 들고 회원가입 화면으로 이동
+          if (intent === 'login') {
+            sessionStorage.removeItem(KAKAO_OAUTH_INTENT_KEY)
+            setMode('login')
+            setShowEmailLogin(false)
+            setError('존재하지 않는 회원입니다. 회원가입을 진행해주세요.')
+            navigate('/auth?mode=login', { replace: true })
+            return
+          }
+          sessionStorage.removeItem(KAKAO_OAUTH_INTENT_KEY)
           const token = data.registrationToken
           const prefilled = data.prefilledData ?? {}
+          const pw = prefilled.password ?? ''
           setRegistrationToken(token)
-          setKakaoAuthData({
-            name: prefilled.nickname ?? '',
-            email: prefilled.email ?? '',
-          })
+          setSignupForm((prev) => ({
+            ...prev,
+            name: prefilled.nickname ?? prev.name ?? '',
+            email: prefilled.email ?? prev.email ?? '',
+            password: pw,
+            passwordConfirm: pw,
+            notificationKakao: true,
+            authMethod: 'kakao',
+          }))
           setMode('signup')
           setAuthMethod('kakao')
-          setShowKakaoNotificationModal(true)
-          // URL에서 code 제거 (보안상 콜백 코드를 URL에 남기지 않음)
+          setActiveStep(0)
           navigate('/auth?mode=signup', { replace: true })
           return
         }
 
-        // 기존 회원: 콜백 응답 토큰으로 즉시 로그인
+        sessionStorage.removeItem(KAKAO_OAUTH_INTENT_KEY)
+
         const accessToken = data?.accessToken ?? response?.data?.accessToken
         if (accessToken) {
+          if (intent === 'signup') {
+            setMode('signup')
+            setAuthMethod(null)
+            setError('이미 존재하는 회원입니다. 카카오로 로그인을 진행해주세요.')
+            navigate('/auth?mode=signup', { replace: true })
+            return
+          }
           setUserFromAuthResponse(response)
           try {
             const me = await getMe(accessToken)
@@ -147,6 +223,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           } catch {
             // /auth/me 실패 시에도 콜백 응답의 토큰/최소 정보로 로그인 유지
           }
+          navigate(redirectFrom || '/mypage', { replace: true })
           return
         }
 
@@ -157,17 +234,28 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
         navigate('/auth?mode=login', { replace: true })
       })
       .catch((err) => {
+        sessionStorage.removeItem(KAKAO_OAUTH_INTENT_KEY)
         const message = err?.message || '카카오 로그인에 실패했습니다.'
         const isMemberNotFound =
           err?.statusCode === 400 && /회원 정보를 찾을 수 없습니다/.test(message)
 
         if (isMemberNotFound) {
-          // 백엔드에서 미가입 카카오 계정으로 판단한 경우 회원가입 플로우로 유도
           setMode('signup')
           setAuthMethod(null)
           setShowEmailLogin(false)
           setSignupSuccessMessage('')
-          setError('아직 카카오 회원가입이 완료되지 않았습니다. "카카오톡으로 시작하기"로 가입을 진행해주세요.')
+          setError('존재하지 않는 회원입니다. 회원가입을 진행해주세요.')
+          navigate('/auth?mode=signup', { replace: true })
+          return
+        }
+
+        const dupKakao =
+          /이미\s*가입|이미\s*존재|duplicate|already\s*registered/i.test(message) &&
+          (err?.statusCode === 400 || err?.statusCode === 409)
+        if (dupKakao) {
+          setMode('signup')
+          setAuthMethod(null)
+          setError('이미 존재하는 회원입니다. 카카오로 로그인을 진행해주세요.')
           navigate('/auth?mode=signup', { replace: true })
           return
         }
@@ -180,7 +268,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       .finally(() => {
         setIsKakaoAuthenticating(false)
       })
-  }, [searchParams, navigate, setUserFromAuthResponse])
+  }, [searchParams, navigate, setUserFromAuthResponse, redirectFrom])
 
   // Validation
   const loginValid = loginForm.email && loginForm.password
@@ -207,12 +295,24 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       await login({ email: loginForm.email, password: loginForm.password })
       navigate(redirectFrom || '/mypage', { replace: true })
     } catch (err) {
-      const base = err.message || '로그인에 실패했습니다.'
-      const kakaoHint =
-        err.statusCode === 401
-          ? ' 카카오로 가입한 계정은 서비스에 비밀번호가 없을 수 있습니다. 아래에서 "카카오톡으로 로그인"을 이용해 주세요.'
-          : ''
-      setError(`${base}${kakaoHint}`)
+      const msg = (err.message || '').toLowerCase()
+      const status = err.statusCode
+      const notFound =
+        status === 404 ||
+        /not\s*found|찾을 수 없|존재하지 않|no\s*user|unknown\s*member/.test(msg)
+      if (notFound) {
+        setError('존재하지 않는 회원입니다. 회원가입을 진행해주세요.')
+      } else if (status === 401) {
+        const kakaoOnly =
+          /kakao|oauth|소셜|비밀번호가 없|password.*not.*set/i.test(err.message || '')
+        setError(
+          kakaoOnly
+            ? '카카오로 가입한 계정입니다. "카카오톡으로 로그인"을 이용해 주세요.'
+            : '이메일 혹은 비밀번호를 확인해주세요.'
+        )
+      } else {
+        setError(err.message || '로그인에 실패했습니다.')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -298,14 +398,27 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
-        await kakaoRegister({
+        const notification = signupForm.notificationKakao ? 'BOTH' : 'email'
+        const response = await kakaoRegister({
           registrationToken,
+          nickname: signupForm.name?.trim() || undefined,
           job: signupForm.jobRole?.trim() || 'OAuthJob',
-          notification: 'kakao',
+          notification,
           frequency,
         })
         setRegistrationToken(null)
-        // 카카오 회원도 가입 후에는 반드시 다시 로그인
+        const accessToken = response?.data?.accessToken ?? response?.accessToken
+        if (accessToken) {
+          setUserFromAuthResponse(response)
+          try {
+            const me = await getMe(accessToken)
+            setUserFromAuthResponse(me)
+          } catch {
+            /* 유지 */
+          }
+          navigate(redirectFrom || '/mypage', { replace: true })
+          return
+        }
         setMode('login')
         setShowEmailLogin(true)
         setLoginForm((prev) => ({
@@ -313,8 +426,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
           email: signupForm.email?.trim() || prev.email,
         }))
         setError('')
-        setSignupSuccessMessage('카카오 회원가입이 완료되었습니다. 다시 로그인해주세요.')
-        // URL 모드도 login으로 맞춰 줌
+        setSignupSuccessMessage('카카오 회원가입이 완료되었습니다. 로그인해 주세요.')
         navigate('/auth?mode=login', { replace: true })
         return
       }
@@ -325,11 +437,22 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       setShowEmailLogin(true)
       setLoginForm((prev) => ({ ...prev, email: signupForm.email?.trim() || prev.email }))
       setError('')
-      setSignupSuccessMessage('회원가입이 완료되었습니다. 로그인해주세요.')
+      setSignupSuccessMessage('회원가입이 완료되었습니다! 로그인 해 주시길 바랍니다.')
       // URL 모드도 login으로 맞춰 줌
       navigate('/auth?mode=login', { replace: true })
     } catch (err) {
-      setError(err.message || '회원가입에 실패했습니다.')
+      const m = err.message || ''
+      const dup =
+        err.statusCode === 409 ||
+        err.statusCode === 400 ||
+        /이미\s*(가입|등록|사용)|duplicate|already\s*exists|already\s*registered/i.test(
+          m
+        )
+      if (dup && /email|메일|이메일|account|계정/i.test(m)) {
+        setError('이미 존재하는 이메일입니다. 이메일로 로그인을 진행해주세요.')
+      } else {
+        setError(m || '회원가입에 실패했습니다.')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -348,6 +471,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
   // 카카오 OAuth 시작: 백엔드 /api/auth/kakao/url?prompt=login → 전달받은 url 로만 리다이렉트
   const handleKakaoAuth = async () => {
     setError('')
+    sessionStorage.setItem(KAKAO_OAUTH_INTENT_KEY, 'signup')
     setIsKakaoAuthenticating(true)
     try {
       const res = await kakaoPromptLogin('login')
@@ -361,33 +485,10 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     }
   }
 
-  // 카카오 알림 설정 확인
-  const handleKakaoNotificationConfirm = (enableNotification) => {
-    if (!kakaoAuthData) return
-
-    // prefilledData 기반으로 회원가입 폼 자동 입력 (registrationToken은 이미 state에 있음)
-    setSignupForm((prev) => ({
-      ...prev,
-      name: kakaoAuthData.name,
-      email: kakaoAuthData.email,
-      password: '',
-      passwordConfirm: '',
-      notificationKakao: enableNotification,
-      authMethod: 'kakao',
-    }))
-
-    if (kakaoAuthData.email) {
-      localStorage.setItem('kakaoAuthEmail', kakaoAuthData.email)
-    }
-
-    setAuthMethod('kakao')
-    setShowKakaoNotificationModal(false)
-    setActiveStep(0) // Step 1로 이동 (기본 정보는 이미 채워짐)
-  }
-
   // 로그인용 카카오 OAuth
   const handleKakaoLogin = () => {
     setError('')
+    sessionStorage.setItem(KAKAO_OAUTH_INTENT_KEY, 'login')
     setIsKakaoAuthenticating(true)
     kakaoPromptLogin('login')
       .then((res) => {
@@ -406,11 +507,11 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
   // 이메일 인증 선택
   const handleEmailAuth = () => {
     setRegistrationToken(null)
-    setKakaoAuthData(null)
     setAuthMethod('email')
     setSignupForm((prev) => ({
       ...prev,
       authMethod: 'email',
+      notificationKakao: false,
     }))
     setActiveStep(0)
     setEmailVerificationSent(false)
@@ -434,7 +535,16 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       })
       setEmailVerificationSent(true)
     } catch (err) {
-      setError(err.message || '인증 메일 발송에 실패했습니다.')
+      const m = err.message || ''
+      const dup =
+        err.statusCode === 409 ||
+        err.statusCode === 400 ||
+        /이미\s*(가입|등록|사용)|duplicate|already/i.test(m)
+      if (dup) {
+        setError('이미 존재하는 이메일입니다. 이메일로 로그인을 진행해주세요.')
+      } else {
+        setError(m || '인증 메일 발송에 실패했습니다.')
+      }
     } finally {
       setIsVerifying(false)
     }
@@ -816,18 +926,66 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
 
                   <div className="form-group">
                     <label className="form-label">알림 설정</label>
-                    <div className="auth__notification-info">
-                      <span>📧</span> 이메일 알림은 기본 제공됩니다.
-                    </div>
+                    {authMethod === 'email' && (
+                      <div className="auth__notification-info">
+                        <span>📧</span>
+                        <span>이메일 알림</span>
+                        <input
+                          type="checkbox"
+                          className="form-check-input"
+                          checked
+                          readOnly
+                          disabled
+                          style={{ marginLeft: 'auto' }}
+                          aria-label="이메일 알림 (기본)"
+                        />
+                      </div>
+                    )}
                     {authMethod === 'kakao' && (
-                      <div className={`auth__notification-info ${signupForm.notificationKakao ? 'auth__notification-info--active' : ''}`}>
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" alt="카카오톡" style={{ width: '20px', height: '20px' }} />
-                        <span>카카오톡 알림 {signupForm.notificationKakao ? '(활성화됨)' : '(비활성화됨)'}</span>
+                      <div className="auth__notification-info">
+                        <span>📧</span>
+                        <span>이메일 알림</span>
+                        <input
+                          type="checkbox"
+                          className="form-check-input"
+                          checked
+                          readOnly
+                          disabled
+                          style={{ marginLeft: 'auto' }}
+                          aria-label="이메일 알림 (기본)"
+                        />
+                      </div>
+                    )}
+                    {authMethod === 'kakao' && (
+                      <div
+                        className={`auth__notification-info ${
+                          signupForm.notificationKakao ? 'auth__notification-info--active' : ''
+                        }`}
+                      >
+                        <img
+                          src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg"
+                          alt="카카오톡"
+                          style={{ width: '20px', height: '20px' }}
+                        />
+                        <span>카카오톡 알림 (선택)</span>
+                        <input
+                          type="checkbox"
+                          className="form-check-input"
+                          checked={signupForm.notificationKakao}
+                          onChange={(e) =>
+                            setSignupForm((p) => ({ ...p, notificationKakao: e.target.checked }))
+                          }
+                          style={{ marginLeft: 'auto' }}
+                        />
                       </div>
                     )}
                     {authMethod === 'email' && (
                       <div className="auth__notification-info">
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" alt="카카오톡" style={{ width: '20px', height: '20px' }} />
+                        <img
+                          src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg"
+                          alt="카카오톡"
+                          style={{ width: '20px', height: '20px' }}
+                        />
                         <span>카카오톡 알림 (선택)</span>
                         <input
                           type="checkbox"
@@ -867,7 +1025,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
                   setMode('login')
                   setAuthMethod(null)
                   setRegistrationToken(null)
-                  setKakaoAuthData(null)
                   setActiveStep(0)
                 }}>
                   로그인
@@ -999,7 +1156,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
                   setMode('signup')
                   setAuthMethod(null)
                   setRegistrationToken(null)
-                  setKakaoAuthData(null)
                   setShowEmailLogin(false)
                 }}>
                   회원가입
@@ -1304,56 +1460,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
                   </div>
                 </>
               )}
-            </Motion.div>
-          </Motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* 카카오 알림 설정 모달 */}
-      <AnimatePresence>
-        {showKakaoNotificationModal && (
-          <Motion.div
-            className="auth__modal-overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => {
-              // 모달 외부 클릭 시 닫지 않음 (명시적 선택 필요)
-            }}
-          >
-            <Motion.div
-              className="auth__modal"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="auth__kakao-modal-header">
-                <img 
-                  src="https://upload.wikimedia.org/wikipedia/commons/e/e3/KakaoTalk_logo.svg" 
-                  alt="카카오톡" 
-                  className="auth__kakao-icon-large"
-                />
-                <h3>카카오톡 알림을 받으시겠어요?</h3>
-                <p>면접 질문과 피드백을 카카오톡으로도 받아보실 수 있습니다.</p>
-              </div>
-
-              <div className="auth__kakao-modal-buttons">
-                <button
-                  type="button"
-                  className="btn btn--secondary"
-                  onClick={() => handleKakaoNotificationConfirm(false)}
-                >
-                  나중에 하기
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--kakao"
-                  onClick={() => handleKakaoNotificationConfirm(true)}
-                >
-                  알림 받기
-                </button>
-              </div>
             </Motion.div>
           </Motion.div>
         )}
