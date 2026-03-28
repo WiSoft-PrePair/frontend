@@ -919,27 +919,26 @@ export default function MockInterview() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="mock-interview__analyzing"
+            className="mock-interview__analyzing card"
           >
-            <div className="mock-interview__analyzing-aurora" aria-hidden />
             <div className="mock-interview__analyzing-inner">
-              <Motion.div
-                className="mock-interview__analyzing-mascot"
-                animate={{ y: [0, -14, 0] }}
-                transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
-                aria-hidden
-              >
-                <span className="mock-interview__analyzing-mascot-face">🤖</span>
-                <span className="mock-interview__analyzing-mascot-glow" />
-              </Motion.div>
+              <div className="mock-interview__analyzing-visual" aria-hidden>
+                <div className="mock-interview__analyzing-spinner" />
+              </div>
 
-              <p className="mock-interview__analyzing-title">
-                면접관 AI가 답변의 논리성과 태도를
-                <br />
-                종합적으로 분석하고 있습니다…
+              <Motion.h2
+                className="mock-interview__analyzing-heading"
+                animate={{ opacity: [1, 0.72, 1] }}
+                transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+              >
+                분석 중
+              </Motion.h2>
+
+              <p className="mock-interview__analyzing-lead">
+                면접관 AI가 답변의 논리성과 태도를 종합적으로 검토하고 있습니다.
               </p>
 
-              <div className="mock-interview__analyzing-progress-web">
+              <div className="mock-interview__analyzing-progress">
                 <div className="mock-interview__analyzing-progress-track">
                   <div
                     className="mock-interview__analyzing-progress-fill"
@@ -949,42 +948,12 @@ export default function MockInterview() {
                 <span className="mock-interview__analyzing-progress-pct">{analysisUiProgress}%</span>
               </div>
 
-              {/* 웹: 궤도 카드 */}
-              <div className="mock-interview__analyzing-orbit-wrap mock-interview__analyzing-orbit-wrap--web">
-                <div className="mock-interview__orbit-spin">
-                  {[
-                    { label: '음성 데이터', deg: 0 },
-                    { label: '시선 처리', deg: 120 },
-                    { label: '단어 선택', deg: 240 },
-                  ].map(({ label, deg }) => (
-                    <div
-                      key={label}
-                      className="mock-interview__orbit-pin"
-                      style={{ '--orbit-deg': `${deg}deg` }}
-                    >
-                      <div className="mock-interview__orbit-counter">
-                        <div className="mock-interview__orbit-glass">{label}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <p className="mock-interview__analyzing-status" role="status" aria-live="polite">
+                {ANALYSIS_STATUS_LABELS[analysisStatusIndex]}
+              </p>
 
-              {/* 모바일: 프로그레스 + 롤링 상태 */}
-              <div className="mock-interview__analyzing-mobile mock-interview__analyzing-mobile--only">
-                <div className="mock-interview__analyzing-progress-track">
-                  <div
-                    className="mock-interview__analyzing-progress-fill"
-                    style={{ width: `${analysisUiProgress}%` }}
-                  />
-                </div>
-                <p className="mock-interview__analyzing-status">
-                  {ANALYSIS_STATUS_LABELS[analysisStatusIndex]}
-                </p>
-              </div>
-
-              <p className="mock-interview__analyzing-hint mock-interview__analyzing-hint--web">
-                잠시만 기다려 주세요. 결과 화면으로 이동합니다.
+              <p className="mock-interview__analyzing-hint">
+                잠시만 기다려 주세요. 곧 결과 화면으로 이동합니다.
               </p>
             </div>
           </Motion.div>
