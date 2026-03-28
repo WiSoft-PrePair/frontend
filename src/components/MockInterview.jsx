@@ -90,19 +90,20 @@ const buildInterviewReport = (answersSnapshot, overallScore) => {
 function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
   return (
     <div className="mock-interview__q-section card">
-      <div className="mock-interview__q-section-score-block">
-        <span className="mock-interview__q-section-score-label">이 질문 점수</span>
-        <p
-          className="mock-interview__q-section-score-value"
-          style={{ color: getScoreColor(q.score) }}
-        >
-          {q.score}
-          <span className="mock-interview__q-section-score-unit">점</span>
-        </p>
-      </div>
       <div className="mock-interview__q-section-body">
-        <span className="mock-interview__q-section-badge">질문 {ordinal}</span>
-        <p className="mock-interview__q-section-question">{q.question}</p>
+        <div className="mock-interview__q-section-header">
+          <div className="mock-interview__q-section-header-text">
+            <span className="mock-interview__q-section-badge">질문 {ordinal}</span>
+            <p className="mock-interview__q-section-question">{q.question}</p>
+          </div>
+          <p
+            className="mock-interview__q-section-score-value"
+            style={{ color: getScoreColor(q.score) }}
+          >
+            {q.score}
+            <span className="mock-interview__q-section-score-unit">점</span>
+          </p>
+        </div>
 
         <div className="mock-interview__q-block">
           <h4 className="mock-interview__q-block-title">스피치 분석</h4>
