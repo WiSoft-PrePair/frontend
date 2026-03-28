@@ -28,27 +28,6 @@ const behaviorMetrics = [
   { id: 'speech', label: '말하기', icon: '🎤', description: '명확한 발음과 적절한 속도' },
 ]
 
-function HexInsightChart({ analysis, className }) {
-  const cx = 60
-  const cy = 54
-  const rMax = 36
-  const keys = ['speech', 'eyeContact', 'expression', 'posture', 'speech', 'eyeContact']
-  const angles = keys.map((_, i) => ((i * 60 - 90) * Math.PI) / 180)
-  const dataPoints = keys.map((k, i) => {
-    const rad = (analysis[k] / 100) * rMax
-    return [cx + rad * Math.cos(angles[i]), cy + rad * Math.sin(angles[i])]
-  })
-  const dataPoly = dataPoints.map((p) => p.join(',')).join(' ')
-  const hexOuter = angles.map((a) => `${cx + rMax * Math.cos(a)},${cy + rMax * Math.sin(a)}`).join(' ')
-
-  return (
-    <svg className={className} viewBox="0 0 120 108" aria-hidden>
-      <polygon points={hexOuter} className="mock-interview__hex-ring" />
-      <polygon points={dataPoly} className="mock-interview__hex-data" />
-    </svg>
-  )
-}
-
 const ANALYSIS_DURATION_MS = 3200
 
 const ANALYSIS_STATUS_LABELS = [
@@ -108,6 +87,68 @@ const buildInterviewReport = (answersSnapshot, overallScore) => {
   }
 }
 
+function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
+  return (
+    <div className="mock-interview__q-section card">
+      <div className="mock-interview__q-section-score-block">
+        <span className="mock-interview__q-section-score-label">이 질문 점수</span>
+        <p
+          className="mock-interview__q-section-score-value"
+          style={{ color: getScoreColor(q.score) }}
+        >
+          {q.score}
+          <span className="mock-interview__q-section-score-unit">점</span>
+        </p>
+      </div>
+      <div className="mock-interview__q-section-body">
+        <span className="mock-interview__q-section-badge">질문 {ordinal}</span>
+        <p className="mock-interview__q-section-question">{q.question}</p>
+
+        <div className="mock-interview__q-block">
+          <h4 className="mock-interview__q-block-title">스피치 분석</h4>
+          <ul className="mock-interview__insight-list">
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
+              {q.speech.strengths.join(', ')}
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">부족한 점</span>
+              {q.speech.weaknesses.join(', ')}
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">개선 방향</span>
+              {q.speech.improvement}
+            </li>
+          </ul>
+        </div>
+
+        <div className="mock-interview__q-block">
+          <h4 className="mock-interview__q-block-title">행동 · 태도 분석</h4>
+          <ul className="mock-interview__insight-list">
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
+              {q.behavior.strengths.join(', ')}
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">부족한 점</span>
+              {q.behavior.weaknesses.join(', ')}
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">개선 방향</span>
+              {q.behavior.improvement}
+            </li>
+          </ul>
+        </div>
+
+        <div className="mock-interview__q-block mock-interview__q-block--narrative">
+          <h4 className="mock-interview__q-block-title">종합 서술 평가</h4>
+          <p className="mock-interview__q-block-text">{q.narrative}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function MockInterview() {
   const [phase, setPhase] = useState('ready') // ready | loading | interview | analyzing | feedback
   const [questionCount, setQuestionCount] = useState(5)
@@ -147,7 +188,6 @@ export default function MockInterview() {
   const [analysisUiProgress, setAnalysisUiProgress] = useState(0)
   const [analysisStatusIndex, setAnalysisStatusIndex] = useState(0)
   const [displayedOverallScore, setDisplayedOverallScore] = useState(0)
-  const [mobileInsightSlide, setMobileInsightSlide] = useState(0)
 
   // isSpeaking 상태를 TTS 상태와 동기화
   useEffect(() => {
@@ -510,21 +550,6 @@ export default function MockInterview() {
       posture: Math.floor(Math.random() * 15) + 80,
       speech: Math.floor(Math.random() * 20) + 75,
       overall: 0,
-      strengths: [
-        '전반적으로 자신감 있는 태도를 보여주셨습니다.',
-        '질문에 대한 답변 구조가 명확했습니다.',
-        '적절한 예시를 들어 설명하셨습니다.',
-      ],
-      improvements: [
-        '가끔 시선이 카메라에서 벗어나는 경향이 있습니다.',
-        '답변 중간에 "음...", "어..." 같은 습관어를 줄여보세요.',
-        '답변 시간을 조금 더 간결하게 조절해보세요.',
-      ],
-      tips: [
-        '면접 전 거울 앞에서 연습하면 표정 관리에 도움이 됩니다.',
-        'STAR 기법을 활용하면 답변을 더 구조화할 수 있습니다.',
-        '예상 질문 리스트를 만들어 반복 연습해보세요.',
-      ],
     }
     overallAnalysis.overall = Math.floor(
       (overallAnalysis.eyeContact +
@@ -546,7 +571,6 @@ export default function MockInterview() {
     setAnalysisUiProgress(0)
     setAnalysisStatusIndex(0)
     setDisplayedOverallScore(0)
-    setMobileInsightSlide(0)
 
     const start = performance.now()
     const rafRef = { current: 0 }
@@ -673,8 +697,6 @@ export default function MockInterview() {
     if (score >= 50) return 'var(--color-warning)'
     return 'var(--color-error)'
   }
-
-  const reportQ1 = interviewReport?.questions?.[0]
 
   return (
     <div className="mock-interview">
@@ -959,7 +981,7 @@ export default function MockInterview() {
           </Motion.div>
         )}
 
-        {phase === 'feedback' && behaviorAnalysis && interviewReport && reportQ1 && (
+        {phase === 'feedback' && behaviorAnalysis && interviewReport?.questions?.length > 0 && (
           <Motion.div
             key="feedback"
             initial={{ opacity: 0, y: 20 }}
@@ -967,263 +989,34 @@ export default function MockInterview() {
             exit={{ opacity: 0, y: -20 }}
             className="mock-interview__feedback mock-interview__feedback--report"
           >
-            {/* 웹·태블릿: 총평 + 평균 점수 + 육각 차트 */}
             <div className="mock-interview__report-hero card mock-interview__glass">
               <div className="mock-interview__report-hero-text">
-                <p className="mock-interview__report-eyebrow">총평 및 종합 점수</p>
+                <p className="mock-interview__report-eyebrow">총평</p>
                 <h3 className="mock-interview__report-headline">모의 면접 종합 평가</h3>
                 <p className="mock-interview__report-summary">{interviewReport.overallSummary}</p>
-                <p className="mock-interview__report-meta">
-                  총 {answers.length}문항 · 전체 평균{' '}
-                  <strong style={{ color: getScoreColor(displayedOverallScore) }}>
-                    {displayedOverallScore}점
-                  </strong>
-                </p>
+                <p className="mock-interview__report-meta">총 {answers.length}문항</p>
               </div>
-              <Motion.div
-                className="mock-interview__report-hex-wrap mock-interview__report-hex-wrap--hero"
-                animate={{ rotate: 360 }}
-                transition={{ duration: 48, repeat: Infinity, ease: 'linear' }}
-              >
-                <HexInsightChart analysis={behaviorAnalysis} className="mock-interview__hex-svg" />
-              </Motion.div>
-            </div>
-
-            {/* 웹: 벤토 그리드 */}
-            <div className="mock-interview__bento mock-interview__bento--web">
-              <div className="mock-interview__bento-card mock-interview__bento-card--q card mock-interview__clay">
-                <span className="mock-interview__bento-label">질문 1</span>
-                <p className="mock-interview__bento-qtext">{reportQ1.question}</p>
-                <p className="mock-interview__bento-score">
-                  해당 질문 점수{' '}
-                  <strong style={{ color: getScoreColor(reportQ1.score) }}>{reportQ1.score}점</strong>
-                </p>
-              </div>
-
-              <div className="mock-interview__bento-card card mock-interview__glass">
-                <h4 className="mock-interview__bento-title">스피치 분석</h4>
-                <ul className="mock-interview__insight-list">
-                  <li>
-                    <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">
-                      잘한 점
-                    </span>
-                    {reportQ1.speech.strengths.join(', ')}
-                  </li>
-                  <li>
-                    <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">
-                      부족한 점
-                    </span>
-                    {reportQ1.speech.weaknesses.join(', ')}
-                  </li>
-                  <li>
-                    <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">
-                      개선 방향
-                    </span>
-                    {reportQ1.speech.improvement}
-                  </li>
-                </ul>
-              </div>
-
-              <div className="mock-interview__bento-card card mock-interview__glass">
-                <h4 className="mock-interview__bento-title">행동 · 태도 분석</h4>
-                <ul className="mock-interview__insight-list">
-                  <li>
-                    <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">
-                      잘한 점
-                    </span>
-                    {reportQ1.behavior.strengths.join(', ')}
-                  </li>
-                  <li>
-                    <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">
-                      부족한 점
-                    </span>
-                    {reportQ1.behavior.weaknesses.join(', ')}
-                  </li>
-                  <li>
-                    <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">
-                      개선 방향
-                    </span>
-                    {reportQ1.behavior.improvement}
-                  </li>
-                </ul>
-              </div>
-
-              <div className="mock-interview__bento-card mock-interview__bento-card--wide card mock-interview__glass mock-interview__glass--strong">
-                <h4 className="mock-interview__bento-title">질문 1 종합 서술 평가</h4>
-                <p className="mock-interview__bento-narrative">{reportQ1.narrative}</p>
-              </div>
-            </div>
-
-            {/* 모바일: 스티키 헤더 + 캐러셀 */}
-            <div className="mock-interview__report-mobile">
-              <div className="mock-interview__report-mobile-sticky card mock-interview__glass">
-                <div>
-                  <p className="mock-interview__report-eyebrow">내 점수</p>
-                  <p
-                    className="mock-interview__report-mobile-score"
-                    style={{ color: getScoreColor(displayedOverallScore) }}
-                  >
-                    {displayedOverallScore}
-                    <span>점</span>
-                  </p>
-                </div>
-                <Motion.div
-                  className="mock-interview__report-hex-wrap mock-interview__report-hex-wrap--sm"
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 48, repeat: Infinity, ease: 'linear' }}
+              <div className="mock-interview__report-hero-scorebox">
+                <span className="mock-interview__report-hero-score-label">전체 평균</span>
+                <p
+                  className="mock-interview__report-hero-score-value"
+                  style={{ color: getScoreColor(displayedOverallScore) }}
                 >
-                  <HexInsightChart analysis={behaviorAnalysis} className="mock-interview__hex-svg" />
-                </Motion.div>
-              </div>
-
-              <div className="mock-interview__report-mobile-intro card mock-interview__glass">
-                <h3 className="mock-interview__report-headline mock-interview__report-headline--sm">
-                  모의 면접 종합 평가
-                </h3>
-                <p className="mock-interview__report-summary">{interviewReport.overallSummary}</p>
-              </div>
-
-              <div className="mock-interview__bento-card card mock-interview__clay">
-                <span className="mock-interview__bento-label">질문 1</span>
-                <p className="mock-interview__bento-qtext">{reportQ1.question}</p>
-                <p className="mock-interview__bento-score">
-                  해당 질문 점수{' '}
-                  <strong style={{ color: getScoreColor(reportQ1.score) }}>{reportQ1.score}점</strong>
+                  {displayedOverallScore}
+                  <span className="mock-interview__report-hero-score-unit">점</span>
                 </p>
               </div>
-
-              <div className="mock-interview__mobile-carousel card mock-interview__glass">
-                <div className="mock-interview__mobile-carousel-header">
-                  <button
-                    type="button"
-                    className={`mock-interview__chip ${mobileInsightSlide === 0 ? 'is-active' : ''}`}
-                    onClick={() => setMobileInsightSlide(0)}
-                  >
-                    스피치 분석
-                  </button>
-                  <button
-                    type="button"
-                    className={`mock-interview__chip ${mobileInsightSlide === 1 ? 'is-active' : ''}`}
-                    onClick={() => setMobileInsightSlide(1)}
-                  >
-                    행동 분석
-                  </button>
-                </div>
-                <div className="mock-interview__mobile-carousel-viewport">
-                  <div
-                    className="mock-interview__mobile-carousel-track"
-                    style={{ transform: `translateX(-${mobileInsightSlide * 100}%)` }}
-                  >
-                    <div className="mock-interview__mobile-carousel-slide">
-                      <h4 className="mock-interview__bento-title">스피치 분석</h4>
-                      <ul className="mock-interview__insight-list">
-                        <li>
-                          <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">
-                            잘한 점
-                          </span>
-                          {reportQ1.speech.strengths.join(', ')}
-                        </li>
-                        <li>
-                          <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">
-                            부족한 점
-                          </span>
-                          {reportQ1.speech.weaknesses.join(', ')}
-                        </li>
-                        <li>
-                          <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">
-                            개선 방향
-                          </span>
-                          {reportQ1.speech.improvement}
-                        </li>
-                      </ul>
-                    </div>
-                    <div className="mock-interview__mobile-carousel-slide">
-                      <h4 className="mock-interview__bento-title">행동 · 태도 분석</h4>
-                      <ul className="mock-interview__insight-list">
-                        <li>
-                          <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">
-                            잘한 점
-                          </span>
-                          {reportQ1.behavior.strengths.join(', ')}
-                        </li>
-                        <li>
-                          <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">
-                            부족한 점
-                          </span>
-                          {reportQ1.behavior.weaknesses.join(', ')}
-                        </li>
-                        <li>
-                          <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">
-                            개선 방향
-                          </span>
-                          {reportQ1.behavior.improvement}
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mock-interview__bento-card card mock-interview__glass mock-interview__glass--strong">
-                <h4 className="mock-interview__bento-title">질문 1 종합 서술 평가</h4>
-                <p className="mock-interview__bento-narrative">{reportQ1.narrative}</p>
-              </div>
             </div>
 
-            {/* 기존 지표·팁·기록 (목업 데이터 유지) */}
-            <div className="mock-interview__legacy-block card card--gradient">
-              <h4 className="mock-interview__legacy-title">세부 지표</h4>
-              <div className="mock-interview__metrics">
-                {behaviorMetrics.map((metric) => (
-                  <div key={metric.id} className="mock-interview__metric">
-                    <div className="mock-interview__metric-header">
-                      <span>
-                        {metric.icon} {metric.label}
-                      </span>
-                      <strong style={{ color: getScoreColor(behaviorAnalysis[metric.id]) }}>
-                        {behaviorAnalysis[metric.id]}점
-                      </strong>
-                    </div>
-                    <div className="mock-interview__metric-bar">
-                      <div
-                        className="mock-interview__metric-fill"
-                        style={{
-                          width: `${behaviorAnalysis[metric.id]}%`,
-                          background: getScoreColor(behaviorAnalysis[metric.id]),
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="mock-interview__feedback-grid">
-              <div className="mock-interview__feedback-card card">
-                <h4>💪 강점</h4>
-                <ul>
-                  {behaviorAnalysis.strengths.map((item, idx) => (
-                    <li key={idx}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-              <div className="mock-interview__feedback-card card">
-                <h4>📈 개선점</h4>
-                <ul>
-                  {behaviorAnalysis.improvements.map((item, idx) => (
-                    <li key={idx}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-
-            <div className="mock-interview__tips card">
-              <h4>💡 면접 팁</h4>
-              <ul>
-                {behaviorAnalysis.tips.map((tip, idx) => (
-                  <li key={idx}>{tip}</li>
-                ))}
-              </ul>
+            <div className="mock-interview__q-feedbacks">
+              {interviewReport.questions.map((q) => (
+                <QuestionFeedbackSection
+                  key={q.index}
+                  q={q}
+                  ordinal={q.index}
+                  getScoreColor={getScoreColor}
+                />
+              ))}
             </div>
 
             <div className="mock-interview__answers card">
