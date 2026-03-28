@@ -1081,20 +1081,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
 
               {showEmailLogin && (
                 <>
-                  <p className="auth__login-email-hint" role="note">
-                    카카오로 가입하셨다면 이메일·비밀번호 대신{' '}
-                    <button
-                      type="button"
-                      className="auth__login-email-hint-link"
-                      onClick={() => {
-                        setShowEmailLogin(false)
-                        setError('')
-                      }}
-                    >
-                      카카오톡으로 로그인
-                    </button>
-                    을 눌러 주세요.
-                  </p>
                   <div className="form-group">
                     <label className="form-label">이메일</label>
                     <input
