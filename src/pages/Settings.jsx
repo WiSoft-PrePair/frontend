@@ -33,10 +33,16 @@ export default function SettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showProModal, setShowProModal] = useState(false)
   const [isLoadingProfile, setIsLoadingProfile] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
-  const handleDeleteAccount = () => {
+  const handleDeleteAccount = async () => {
     if (showDeleteConfirm) {
-      deleteAccount()
+      setDeleteError('')
+      try {
+        await deleteAccount()
+      } catch (e) {
+        setDeleteError(e.message || '회원 탈퇴 처리에 실패했습니다. 잠시 후 다시 시도해주세요.')
+      }
     } else {
       setShowDeleteConfirm(true)
     }
@@ -132,11 +138,11 @@ export default function SettingsPage() {
         const cadenceId = form.cadence?.id ?? form.cadence
         const frequency = cadenceId === 'weekly' ? 'weekly' : 'every'
 
-        // 알림 채널(email | kakao | BOTH)
+        // 알림 채널(email | kakao | both, BE 스펙 소문자)
         let notification = 'email'
         const emailOn = form.notificationEmail
         const kakaoOn = form.notificationKakao
-        if (emailOn && kakaoOn) notification = 'BOTH'
+        if (emailOn && kakaoOn) notification = 'both'
         else if (!emailOn && kakaoOn) notification = 'kakao'
         else if (emailOn && !kakaoOn) notification = 'email'
 
@@ -766,12 +772,20 @@ export default function SettingsPage() {
                     ? '정말 탈퇴하시겠습니까? 모든 데이터가 삭제되며 복구할 수 없습니다.'
                     : '회원 탈퇴 시 모든 데이터가 영구적으로 삭제됩니다.'}
                 </p>
+                {deleteError && (
+                  <p className="settings__danger-text" style={{ color: 'var(--color-error, #c0392b)', marginTop: '0.5rem' }}>
+                    {deleteError}
+                  </p>
+                )}
               </div>
               <div className="settings__danger-actions">
                 {showDeleteConfirm && (
                   <button
                     className="btn btn--ghost"
-                    onClick={() => setShowDeleteConfirm(false)}
+                    onClick={() => {
+                      setShowDeleteConfirm(false)
+                      setDeleteError('')
+                    }}
                   >
                     취소
                   </button>

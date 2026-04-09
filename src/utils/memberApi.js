@@ -211,7 +211,7 @@ export async function kakaoCallback(payload) {
 /**
  * OAuth 회원가입 (카카오) | POST /api/auth/kakao/register
  * Body: { registrationToken, nickname?, job, notification, frequency }
- * notification: "email" | "kakao" | "BOTH"
+ * notification: "email" | "kakao" | "both"
  * frequency: "weekly" | "every"
  */
 export async function kakaoRegister(payload) {
@@ -345,7 +345,22 @@ export async function deleteMember(accessToken) {
       method: 'DELETE',
       headers,
     })
-    return handleResponse(response)
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      const msg = pickApiErrorMessage(errorData) || '요청 처리 중 오류가 발생했습니다.'
+      const error = new Error(msg)
+      error.statusCode = response.status
+      error.isServerError = response.status >= 500
+      throw error
+    }
+    if (response.status === 204) {
+      return { success: true }
+    }
+    const text = await response.text()
+    if (!text.trim()) {
+      return { success: true }
+    }
+    return JSON.parse(text)
   } catch (error) {
     console.error('[memberApi] deleteMember error:', error)
     throw wrapNetworkError(error)

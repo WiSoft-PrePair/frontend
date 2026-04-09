@@ -25,6 +25,21 @@ const STORAGE_ACTIVITY_KEY = 'prepair_activity'
 const STORAGE_PURCHASES_KEY = 'prepair_purchases'
 const STORAGE_PRO_USAGE_KEY = 'prepair_pro_usage'
 
+/** 로그인·/auth/me 등 응답에서 member 페이로드 추출 (중첩 member, member_info 등 지원) */
+function extractApiUser(response) {
+  if (response == null) return null
+  return (
+    response?.data?.member_info ??
+    response?.data?.user ??
+    response?.data?.member ??
+    response?.member_info ??
+    response?.member ??
+    response?.data ??
+    response?.user ??
+    response
+  )
+}
+
 export function AppProvider({children}) {
   const [user, setUser] = useState(() => {
     try {
@@ -118,21 +133,40 @@ export function AppProvider({children}) {
   const normalizeUser = useCallback((apiUser) => {
     if (!apiUser) return null
 
-    // 백엔드 notification(email | kakao | BOTH) → FE 채널 체크 상태 (소문자 both 는 구버전 호환)
-    const rawNotification =
-      apiUser.notification ??
-      apiUser.notificationKakao ??
-      apiUser.notification_kakao
-    const n =
-      rawNotification == null || rawNotification === ''
-        ? ''
-        : String(rawNotification).toLowerCase()
-    const isBoth = rawNotification === 'BOTH' || n === 'both'
-    let notificationKakao = n === 'kakao' || isBoth
-    let notificationEmail = n === 'email' || isBoth
-    if (rawNotification == null || rawNotification === '') {
-      notificationEmail = true
-      notificationKakao = false
+    // 백엔드 notification(email | kakao | both) → FE 채널 체크 상태
+    // 주의: notificationKakao 는 boolean 으로 오는 경우가 많아 문자열 폴백에 넣으면 "true" 로 깨짐
+    const rawStr =
+      typeof apiUser.notification === 'string' && apiUser.notification !== ''
+        ? apiUser.notification
+        : typeof apiUser.notificationChannel === 'string' && apiUser.notificationChannel !== ''
+          ? apiUser.notificationChannel
+          : typeof apiUser.notification_type === 'string' && apiUser.notification_type !== ''
+            ? apiUser.notification_type
+            : null
+
+    let notificationKakao = false
+    let notificationEmail = true
+
+    if (rawStr != null) {
+      const n = String(rawStr).toLowerCase()
+      const isBoth = n === 'both'
+      notificationKakao = n === 'kakao' || isBoth
+      notificationEmail = n === 'email' || isBoth
+    } else {
+      const kOn =
+        apiUser.notificationKakao === true || apiUser.notification_kakao === true
+      const kOff =
+        apiUser.notificationKakao === false || apiUser.notification_kakao === false
+      const eOn =
+        apiUser.notificationEmail === true || apiUser.notification_email === true
+      const eOff =
+        apiUser.notificationEmail === false || apiUser.notification_email === false
+      if (kOn || kOff || eOn || eOff) {
+        notificationKakao = kOn && !kOff
+        if (eOff && !eOn) notificationEmail = false
+        else if (eOn) notificationEmail = true
+        else notificationEmail = true
+      }
     }
 
     // 백엔드 frequency(weekly | every) → 기존 cadence 필드에 매핑
@@ -194,13 +228,7 @@ export function AppProvider({children}) {
   // 로그인 (memberApi 연동)
   const login = useCallback(async ({ email, password }) => {
     const response = await memberApi.login({ email, password })
-    // BE: data.member_info 또는 data.user 또는 data
-    const apiUser =
-      response.data?.member_info ??
-      response.data?.user ??
-      response.data ??
-      response.user ??
-      response
+    const apiUser = extractApiUser(response)
     const accessToken = response.data?.accessToken ?? response.accessToken
     const refreshToken = response.data?.refreshToken ?? response.refreshToken
 
@@ -221,8 +249,8 @@ export function AppProvider({children}) {
     const cadenceId = formData.cadence?.id ?? formData.cadence
     const frequency = cadenceId === 'weekly' ? 'weekly' : 'every'
 
-    // 알림 채널: email | kakao | BOTH (카카오톡까지 선택 시 BOTH)
-    const notification = formData.notificationKakao ? 'BOTH' : 'email'
+    // 알림 채널: email | kakao | both (BE 스펙 소문자)
+    const notification = formData.notificationKakao ? 'both' : 'email'
 
     const payload = {
       email: formData.email?.trim(),
@@ -239,12 +267,7 @@ export function AppProvider({children}) {
 
   // 로그인/회원가입 API 응답으로 사용자 상태 설정 (Auth 페이지에서 사용)
   const setUserFromAuthResponse = useCallback((response) => {
-    const apiUser =
-      response?.data?.member_info ??
-      response?.data?.user ??
-      response?.data ??
-      response?.user ??
-      response
+    const apiUser = extractApiUser(response)
     const accessToken = response?.data?.accessToken ?? response?.accessToken
     const refreshToken = response?.data?.refreshToken ?? response?.refreshToken
 
@@ -284,7 +307,7 @@ export function AppProvider({children}) {
     }
   }, [])
 
-  // 회원 탈퇴 (백엔드 API + 로컬 상태/히스토리 정리)
+  // 회원 탈퇴 (백엔드 API 성공 시에만 로컬 상태/히스토리 정리)
   const deleteAccount = useCallback(async () => {
     setIsLoggingOut(true)
     const accessToken = authStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
@@ -293,11 +316,6 @@ export function AppProvider({children}) {
       if (accessToken) {
         await memberApi.deleteMember(accessToken)
       }
-    } catch (error) {
-      console.error('[AppStateContext] deleteAccount api error:', error)
-      // 탈퇴 API 실패 시에는 계정/데이터를 그대로 두는 것이 안전하지만
-      // 현재 UX 요구사항에 맞춰 클라이언트 데이터는 정리한다.
-    } finally {
       setUser(null)
       setCurrentQuestion(null)
       setLastFeedback(null)
@@ -310,6 +328,10 @@ export function AppProvider({children}) {
       localStorage.removeItem(STORAGE_HISTORY_KEY)
       localStorage.removeItem(STORAGE_ACTIVITY_KEY)
       localStorage.removeItem(STORAGE_PURCHASES_KEY)
+    } catch (error) {
+      console.error('[AppStateContext] deleteAccount api error:', error)
+      throw error
+    } finally {
       setIsLoggingOut(false)
     }
   }, [])

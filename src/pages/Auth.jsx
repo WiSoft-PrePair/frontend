@@ -97,6 +97,13 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     }
   }, [searchParams])
 
+  // 브라우저 뒤로가기 등으로 히스토리만 바뀐 경우 이전 화면의 에러 메시지 제거
+  useEffect(() => {
+    const onPopState = () => setError('')
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
   // 카카오 콜백 라우트에서 전달된 오류 코드 (?kakaoError=)
   useEffect(() => {
     const kakaoError = searchParams.get('kakaoError')
@@ -398,7 +405,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       // 카카오 신규 회원: registrationToken으로 회원가입 API 호출
       if (authMethod === 'kakao' && registrationToken) {
         const frequency = signupForm.cadence?.id === 'weekly' ? 'weekly' : 'every'
-        const notification = signupForm.notificationKakao ? 'BOTH' : 'email'
+        const notification = signupForm.notificationKakao ? 'both' : 'email'
         const response = await kakaoRegister({
           registrationToken,
           nickname: signupForm.name?.trim() || undefined,
@@ -444,10 +451,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       const m = err.message || ''
       const dup =
         err.statusCode === 409 ||
-        err.statusCode === 400 ||
-        /이미\s*(가입|등록|사용)|duplicate|already\s*exists|already\s*registered/i.test(
-          m
-        )
+        /이미\s*(가입|등록|사용)|duplicate|already\s*exists|already\s*registered/i.test(m)
       if (dup && /email|메일|이메일|account|계정/i.test(m)) {
         setError('이미 존재하는 이메일입니다. 이메일로 로그인을 진행해주세요.')
       } else {
@@ -461,10 +465,12 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
   const goNext = () => {
     if (activeStep === 0 && !step1Valid) return
     if (activeStep === 1 && !step2Valid) return
+    setError('')
     setActiveStep((prev) => Math.min(prev + 1, steps.length - 1))
   }
 
   const goPrev = () => {
+    setError('')
     setActiveStep((prev) => Math.max(prev - 1, 0))
   }
 
@@ -538,7 +544,6 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
       const m = err.message || ''
       const dup =
         err.statusCode === 409 ||
-        err.statusCode === 400 ||
         /이미\s*(가입|등록|사용)|duplicate|already/i.test(m)
       if (dup) {
         setError('이미 존재하는 이메일입니다. 이메일로 로그인을 진행해주세요.')
@@ -1022,6 +1027,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
               <p className="auth__switch">
                 이미 계정이 있으신가요?{' '}
                 <button type="button" className="auth__switch-link" onClick={() => {
+                  setError('')
                   setMode('login')
                   setAuthMethod(null)
                   setRegistrationToken(null)
@@ -1072,7 +1078,10 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
                   <button
                     type="button"
                     className="btn btn--secondary btn--block auth__email-login-btn"
-                    onClick={() => setShowEmailLogin(true)}
+                    onClick={() => {
+                      setError('')
+                      setShowEmailLogin(true)
+                    }}
                   >
                     이메일로 로그인
                   </button>
@@ -1139,6 +1148,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
               <p className="auth__switch">
                 계정이 없으신가요?{' '}
                 <button type="button" className="auth__switch-link" onClick={() => {
+                  setError('')
                   setMode('signup')
                   setAuthMethod(null)
                   setRegistrationToken(null)
