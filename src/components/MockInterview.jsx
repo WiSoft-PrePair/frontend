@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion as Motion, AnimatePresence } from 'framer-motion'
+import { useAppState } from '../context/AppStateContext'
 import { useTTS } from '../hooks/useTTS'
 import { textToSpeech } from '../utils/ttsApi'
+import { createVideoInterviewQuestion } from '../utils/interviewApi'
 import Dropdown from './Dropdown'
 import '../styles/components/MockInterview.css'
 
@@ -37,6 +39,23 @@ const ANALYSIS_STATUS_LABELS = [
   '비언어적 태도와 말하기 리듬을 교차 검증하는 중…',
   '질문별 피드백 초안을 생성하는 중…',
 ]
+
+function normalizeVideoQuestionList(response) {
+  const list = Array.isArray(response?.data)
+    ? response.data
+    : Array.isArray(response)
+      ? response
+      : []
+
+  return list
+    .map((item, idx) => ({
+      id: item?.id ?? `video-q-${Date.now()}-${idx}`,
+      text: item?.question ?? item?.text ?? '',
+      category: item?.questionType ?? 'VIDEO',
+      sessionId: item?.sessionId ?? null,
+    }))
+    .filter((item) => item.text)
+}
 
 const buildInterviewReport = (answersSnapshot, overallScore) => {
   const prototypeSpeech = {
@@ -151,6 +170,7 @@ function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
 }
 
 export default function MockInterview() {
+  const { getAccessToken } = useAppState()
   const [phase, setPhase] = useState('ready') // ready | loading | interview | analyzing | feedback
   const [questionCount, setQuestionCount] = useState(5)
   const [selectedQuestions, setSelectedQuestions] = useState([])
@@ -164,6 +184,7 @@ export default function MockInterview() {
   const [recordingTime, setRecordingTime] = useState(0)
   const [audioLevel, setAudioLevel] = useState(0)
   const [isQuestionVisible, setIsQuestionVisible] = useState(false)
+  const [videoSessionId, setVideoSessionId] = useState(null)
 
   // TTS 음성 선택
   const [selectedSpeaker, setSelectedSpeaker] = useState('alloy_calm')
@@ -462,8 +483,23 @@ export default function MockInterview() {
     // 모바일 오디오 초기화 (사용자 인터랙션 직후 호출해야 함)
     initAudioForMobile()
 
-    // 질문 선택
-    const questions = selectRandomQuestions(questionCount)
+    // 질문 선택: VIDEO API 우선, 실패 시 랜덤 질문 폴백
+    let questions = []
+    try {
+      const accessToken = getAccessToken?.()
+      const response = await createVideoInterviewQuestion({ count: questionCount }, accessToken)
+      questions = normalizeVideoQuestionList(response)
+      if (questions.length > 0) {
+        setVideoSessionId(questions[0].sessionId || null)
+      }
+    } catch (error) {
+      console.error('[MockInterview] createVideoInterviewQuestion error:', error)
+    }
+    if (questions.length === 0) {
+      questions = selectRandomQuestions(questionCount)
+      setVideoSessionId(null)
+    }
+
     setSelectedQuestions(questions)
     setIsQuestionVisible(false)
 
@@ -629,6 +665,7 @@ export default function MockInterview() {
     setCountdown(null)
     setRecordingTime(0)
     setIsQuestionVisible(false)
+    setVideoSessionId(null)
   }
 
   // 컴포넌트 언마운트 시 정리

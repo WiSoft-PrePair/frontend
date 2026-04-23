@@ -5,6 +5,11 @@ import { useAppState } from '../context/AppStateContext'
 import useMediaQuery from '../hooks/useMediaQuery'
 import MockInterview from '../components/MockInterview'
 import ProUpgradeModal, { ProTab } from '../components/ProUpgradeModal'
+import {
+  createCompanyInterviewQuestion,
+  getInterviewQuestions,
+  submitTextInterviewAnswer,
+} from '../utils/interviewApi'
 import '../styles/pages/Interview.css'
 import '../styles/components/pro-upgrade.css'
 
@@ -222,8 +227,107 @@ function analyzeStrengthsWeaknesses(scores) {
 
 const VALID_TABS = ['practice', 'history', 'mock', 'jobpost']
 
+function normalizeQuestion(raw, fallbackId = Date.now()) {
+  if (!raw || typeof raw !== 'object') return null
+  return {
+    id: raw.id ?? raw.questionId ?? raw.question_id ?? fallbackId,
+    text: raw.text ?? raw.question ?? raw.content ?? '',
+    category: raw.category ?? raw.type ?? '일반',
+  }
+}
+
+function pickQuestionListPayload(response) {
+  if (Array.isArray(response)) return response
+  if (Array.isArray(response?.data)) return response.data
+  if (Array.isArray(response?.questions)) return response.questions
+  if (Array.isArray(response?.data?.questions)) return response.data.questions
+  if (Array.isArray(response?.data?.items)) return response.data.items
+  if (Array.isArray(response?.items)) return response.items
+  return []
+}
+
+function splitListText(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value.filter(Boolean)
+  return String(value)
+    .split(/[\n\r]|(?<=\.)\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function splitTagText(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value.filter(Boolean)
+  return String(value)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function normalizeCompanyAnalysis(raw) {
+  const content = raw?.content ?? {}
+  return {
+    company: content.companyName ?? raw?.companyName ?? '',
+    position: content.jobTitle ?? raw?.jobTitle ?? '',
+    department: content.employmentType ?? raw?.employmentType ?? '',
+    requirements: splitListText(content.responsibilities || content.requirements),
+    preferredQualifications: splitListText(content.preferredQualifications),
+    keywords: splitTagText(content.techStack),
+  }
+}
+
+function normalizeCompanyQuestions(list = []) {
+  return list.map((item, index) => ({
+    id: item?.id ?? `company-q-${Date.now()}-${index}`,
+    category: item?.questionType ?? 'COMPANY',
+    text: item?.question ?? item?.text ?? '',
+    relevance: item?.questionTag ?? '',
+    questionId: item?.id,
+  }))
+}
+
+function toFeedbackList(value) {
+  if (Array.isArray(value)) return value.filter(Boolean)
+  if (!value) return []
+  return [String(value)]
+}
+
+function normalizeFeedbackResponse(response, question, answer, fallbackFactory) {
+  const payload = response?.data ?? response ?? {}
+  const score = payload?.score ?? payload?.totalScore ?? payload?.overallScore
+  if (typeof score !== 'number') return fallbackFactory(question, answer)
+
+  const feedback = payload?.feedback ?? {}
+  const strengths = toFeedbackList(payload?.strengths ?? payload?.pros ?? feedback?.good)
+  const improvements = toFeedbackList(
+    payload?.improvements ??
+      payload?.cons ??
+      payload?.weaknesses ??
+      feedback?.improvement
+  )
+  const recommendations = toFeedbackList(feedback?.recommendation)
+
+  return {
+    score,
+    breakdown: payload?.breakdown ?? payload?.scores ?? {},
+    summary:
+      payload?.summary ??
+      payload?.comment ??
+      recommendations[0] ??
+      '피드백이 생성되었습니다.',
+    strengths,
+    improvements,
+    recommendations,
+    question: question?.text ?? '',
+    category: question?.category,
+    answer,
+    historyId: payload?.historyId ?? payload?.id ?? `h-${Date.now()}`,
+    earnedPoints: payload?.earnedPoints ?? payload?.point ?? Math.max(40, Math.floor(score * 0.6)),
+  }
+}
+
 export default function CoachPage() {
-  const { user, recordInterviewResult, lastFeedback, getTodayQuestion, generateMockFeedback, generateReFeedback, scoreHistory, companyHistory, isPro, canUseMockInterview, canUseJobPost, useMockInterview, useJobPost } = useAppState()
+  const { user, recordInterviewResult, lastFeedback, getTodayQuestion, generateMockFeedback, generateReFeedback, scoreHistory, companyHistory, isPro, canUseMockInterview, canUseJobPost, useMockInterview, useJobPost, getAccessToken } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()
@@ -502,18 +606,33 @@ export default function CoachPage() {
     setCurrentPage(1)
   }
 
-  // Fetch today's question (using mock data)
+  const fetchTextQuestion = useCallback(async () => {
+    const accessToken = getAccessToken?.()
+    try {
+      const response = await getInterviewQuestions(
+        { type: 'TEXT', userId: user?.id },
+        accessToken
+      )
+      const list = pickQuestionListPayload(response)
+      const normalizedList = list.map((item, idx) => normalizeQuestion(item, Date.now() + idx)).filter(Boolean)
+      if (normalizedList.length > 0) {
+        setQuestion(normalizedList[0])
+        return
+      }
+    } catch (err) {
+      console.error('[Interview] fetchTextQuestion error:', err)
+    }
+
+    // API 실패/빈 응답 시 기존 목업 질문으로 폴백
+    setQuestion(getTodayQuestion())
+  }, [getAccessToken, getTodayQuestion, user?.id])
+
+  // Fetch today's question (TEXT API 우선)
   useEffect(() => {
     if (!user?.id) return
     setIsLoadingQuestion(true)
-    // Simulate loading delay
-    const timer = setTimeout(() => {
-      const data = getTodayQuestion()
-      setQuestion(data)
-      setIsLoadingQuestion(false)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [user?.id, getTodayQuestion])
+    fetchTextQuestion().finally(() => setIsLoadingQuestion(false))
+  }, [user?.id, fetchTextQuestion])
 
   // Load history from context (mock data)
   useEffect(() => {
@@ -562,32 +681,46 @@ export default function CoachPage() {
     }
   }, [answer])
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!answer.trim() || !question?.id) return
 
     setIsSubmitting(true)
     setError('')
-
-    // Simulate API delay
-    setTimeout(() => {
-      const feedbackData = generateMockFeedback(question, answer.trim())
+    try {
+      const accessToken = getAccessToken?.()
+      const response = await submitTextInterviewAnswer(
+        question.id,
+        { answer: answer.trim() },
+        accessToken
+      )
+      const feedbackData = normalizeFeedbackResponse(
+        response,
+        question,
+        answer.trim(),
+        generateMockFeedback
+      )
       setFeedback(feedbackData)
       recordInterviewResult(feedbackData)
+    } catch (err) {
+      const fallbackFeedback = generateMockFeedback(question, answer.trim())
+      setFeedback(fallbackFeedback)
+      recordInterviewResult(fallbackFeedback)
+      setError(err?.message || '답변 제출에 실패하여 목업 피드백으로 대체했습니다.')
+    } finally {
       setIsSubmitting(false)
-    }, 800)
+    }
   }
 
-  const handleNewQuestion = () => {
+  const handleNewQuestion = async () => {
     setFeedback(null)
     setAnswer('')
     setQuestion(null)
     setIsLoadingQuestion(true)
-    // Get new random question from mock data
-    setTimeout(() => {
-      const newQuestion = getTodayQuestion()
-      setQuestion(newQuestion)
+    try {
+      await fetchTextQuestion()
+    } finally {
       setIsLoadingQuestion(false)
-    }, 300)
+    }
   }
 
   const getScoreColor = (score) => {
@@ -645,7 +778,7 @@ export default function CoachPage() {
   }, [editedAnswer, isReFeedbackMode])
 
   // Job Post Analysis handlers
-  const handleAnalyzeJobPost = () => {
+  const handleAnalyzeJobPost = async () => {
     if (!jobPostUrl.trim()) return
 
     setIsAnalyzingJobPost(true)
@@ -654,81 +787,42 @@ export default function CoachPage() {
     setSelectedJobQuestion(null)
     setJobFeedback(null)
 
-    // Mock API call - simulate analysis
-    setTimeout(() => {
-      const mockAnalysis = {
-        company: '네이버',
-        position: '백엔드 개발자',
-        department: '검색플랫폼',
-        requirements: [
-          'Java/Kotlin 기반 서버 개발 경험 3년 이상',
-          '대용량 트래픽 처리 경험',
-          'Spring Framework 활용 능력',
-          'MSA 아키텍처 이해',
-        ],
-        preferredQualifications: [
-          'Kubernetes/Docker 경험',
-          '검색 엔진 관련 경험',
-          '오픈소스 기여 경험',
-        ],
-        keywords: ['Java', 'Kotlin', 'Spring', 'MSA', '대용량 트래픽', 'Kubernetes'],
+    setError('')
+    try {
+      const accessToken = getAccessToken?.()
+      const response = await createCompanyInterviewQuestion(
+        { url: jobPostUrl.trim() },
+        accessToken
+      )
+      const payload = response?.data ?? response ?? {}
+      const normalizedAnalysis = normalizeCompanyAnalysis(payload.jobPosting)
+      const normalizedQuestions = normalizeCompanyQuestions(payload.questions || [])
+
+      if (!normalizedQuestions.length) {
+        throw new Error('생성된 질문이 없습니다. 다른 공고로 다시 시도해주세요.')
       }
 
-      const mockQuestions = [
-        {
-          id: 1,
-          category: '기술',
-          text: '대용량 트래픽을 처리했던 경험에 대해 설명해주세요. 어떤 기술적 도전이 있었고, 어떻게 해결했나요?',
-          relevance: '대용량 트래픽 처리 경험 요구사항 기반',
-        },
-        {
-          id: 2,
-          category: '기술',
-          text: 'MSA 아키텍처를 적용한 프로젝트 경험이 있다면 설명해주세요. 모놀리식 대비 장단점은 무엇이었나요?',
-          relevance: 'MSA 아키텍처 이해 요구사항 기반',
-        },
-        {
-          id: 3,
-          category: '경험',
-          text: 'Spring Framework를 활용한 프로젝트에서 가장 어려웠던 문제는 무엇이었고, 어떻게 해결했나요?',
-          relevance: 'Spring Framework 활용 능력 기반',
-        },
-        {
-          id: 4,
-          category: '협업',
-          text: '팀 내에서 기술적 의사결정을 할 때 의견 충돌이 있었던 경험과 어떻게 해결했는지 설명해주세요.',
-          relevance: '팀 협업 역량 평가',
-        },
-        {
-          id: 5,
-          category: '성장',
-          text: '새로운 기술을 학습할 때 어떤 방식으로 접근하시나요? 최근에 학습한 기술과 그 과정을 설명해주세요.',
-          relevance: '자기 주도적 학습 역량',
-        },
-      ]
+      setJobPostAnalysis(normalizedAnalysis)
+      setJobPostQuestions(normalizedQuestions)
 
-      setJobPostAnalysis(mockAnalysis)
-      setJobPostQuestions(mockQuestions)
-
-      // 히스토리에 추가
       const historyItem = {
-        id: Date.now(),
+        id: payload?.jobPosting?.id ?? Date.now(),
         url: jobPostUrl,
-        company: mockAnalysis.company,
-        position: mockAnalysis.position,
-        department: mockAnalysis.department,
-        keywords: mockAnalysis.keywords,
+        company: normalizedAnalysis.company,
+        position: normalizedAnalysis.position,
+        department: normalizedAnalysis.department,
+        keywords: normalizedAnalysis.keywords,
         date: new Date().toISOString(),
-        analysis: mockAnalysis,
-        questions: mockQuestions,
+        analysis: normalizedAnalysis,
+        questions: normalizedQuestions,
       }
-      setJobPostHistory(prev => [historyItem, ...prev])
-
-      // 브라우저 히스토리에 상태 추가
+      setJobPostHistory((prev) => [historyItem, ...prev])
       window.history.pushState({ jobpostStep: 'analysis' }, '')
-
+    } catch (err) {
+      setError(err?.message || '공고 분석에 실패했습니다.')
+    } finally {
       setIsAnalyzingJobPost(false)
-    }, 1500)
+    }
   }
 
   // 히스토리에서 공고 선택
@@ -760,15 +854,28 @@ export default function CoachPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const handleSubmitJobAnswer = () => {
+  const handleSubmitJobAnswer = async () => {
     if (!jobAnswer.trim() || !selectedJobQuestion) return
 
     setIsSubmittingJobAnswer(true)
+    setError('')
 
-    setTimeout(() => {
-      const feedbackData = generateMockFeedback(
-        { id: selectedJobQuestion.id, text: selectedJobQuestion.text, category: selectedJobQuestion.category },
-        jobAnswer.trim()
+    try {
+      const accessToken = getAccessToken?.()
+      const response = await submitTextInterviewAnswer(
+        selectedJobQuestion.questionId || selectedJobQuestion.id,
+        { answer: jobAnswer.trim() },
+        accessToken
+      )
+      const feedbackData = normalizeFeedbackResponse(
+        response,
+        {
+          id: selectedJobQuestion.id,
+          text: selectedJobQuestion.text,
+          category: selectedJobQuestion.category,
+        },
+        jobAnswer.trim(),
+        generateMockFeedback
       )
       setJobFeedback(feedbackData)
       recordInterviewResult({
@@ -777,10 +884,24 @@ export default function CoachPage() {
         company: jobPostAnalysis?.company,
         position: jobPostAnalysis?.position,
       })
-      setIsSubmittingJobAnswer(false)
-      // 브라우저 히스토리에 상태 추가
       window.history.pushState({ jobpostStep: 'feedback' }, '')
-    }, 800)
+    } catch (err) {
+      const fallbackFeedback = generateMockFeedback(
+        { id: selectedJobQuestion.id, text: selectedJobQuestion.text, category: selectedJobQuestion.category },
+        jobAnswer.trim()
+      )
+      setJobFeedback(fallbackFeedback)
+      recordInterviewResult({
+        ...fallbackFeedback,
+        source: 'jobpost',
+        company: jobPostAnalysis?.company,
+        position: jobPostAnalysis?.position,
+      })
+      setError(err?.message || '답변 제출에 실패하여 목업 피드백으로 대체했습니다.')
+      window.history.pushState({ jobpostStep: 'feedback' }, '')
+    } finally {
+      setIsSubmittingJobAnswer(false)
+    }
   }
 
   const handleResetJobPost = () => {
