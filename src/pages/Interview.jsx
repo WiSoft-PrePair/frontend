@@ -344,7 +344,7 @@ function normalizeFeedbackResponse(response, question, answer) {
 }
 
 export default function CoachPage() {
-  const { user, recordInterviewResult, lastFeedback, generateReFeedback, scoreHistory, companyHistory, isPro, canUseMockInterview, canUseJobPost, useMockInterview, useJobPost, getAccessToken } = useAppState()
+  const { user, recordInterviewResult, lastFeedback, scoreHistory, companyHistory, isPro, canUseMockInterview, canUseJobPost, useMockInterview, useJobPost, getAccessToken } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()
@@ -632,15 +632,8 @@ export default function CoachPage() {
     if (!selectedHistory || !editedAnswer.trim()) return
 
     setIsSubmittingReFeedback(true)
-
-    // Simulate API call
-    setTimeout(() => {
-      const feedbackData = generateReFeedback(selectedHistory, editedAnswer.trim())
-      setReFeedback(feedbackData)
-      recordInterviewResult(feedbackData)
-      setIsSubmittingReFeedback(false)
-      setIsReFeedbackMode(false)
-    }, 800)
+    setError('재피드백 API가 아직 연결되지 않았습니다. 임시 데이터는 비활성화되었습니다.')
+    setIsSubmittingReFeedback(false)
   }
 
   // Auto-resize edit textarea
@@ -1751,7 +1744,7 @@ export default function CoachPage() {
                 <div className="coach__modal-feedback-card coach__modal-feedback-card--strength">
                   <h5>💪 잘한 점</h5>
                   <ul>
-                    {(selectedHistory.strengths || ['구체적인 경험을 바탕으로 답변함', 'STAR 기법을 적절히 활용함']).map((item, idx) => (
+                    {(selectedHistory.strengths || []).map((item, idx) => (
                       <li key={idx}>{item}</li>
                     ))}
                   </ul>
@@ -1759,7 +1752,7 @@ export default function CoachPage() {
                 <div className="coach__modal-feedback-card coach__modal-feedback-card--improvement">
                   <h5>📈 개선할 점</h5>
                   <ul>
-                    {(selectedHistory.improvements || ['결과에 대한 수치화된 성과 추가 필요', '팀 내 역할을 더 명확히 설명']).map((item, idx) => (
+                    {(selectedHistory.improvements || []).map((item, idx) => (
                       <li key={idx}>{item}</li>
                     ))}
                   </ul>
@@ -1767,7 +1760,7 @@ export default function CoachPage() {
                 <div className="coach__modal-feedback-card coach__modal-feedback-card--study">
                   <h5>📚 추천 학습</h5>
                   <ul>
-                    {(selectedHistory.recommendations || ['성과 수치화 연습하기', 'STAR 기법 심화 학습']).map((item, idx) => (
+                    {(selectedHistory.recommendations || []).map((item, idx) => (
                       <li key={idx}>{item}</li>
                     ))}
                   </ul>
@@ -1831,7 +1824,7 @@ export default function CoachPage() {
                     <div className="coach__modal-feedback-card coach__modal-feedback-card--study">
                       <h5>📚 추천 학습</h5>
                       <ul>
-                        {(reFeedback.recommendations || ['STAR 기법 심화 학습', '답변 구조화 연습']).map((item, idx) => (
+                        {(reFeedback.recommendations || []).map((item, idx) => (
                           <li key={idx}>{item}</li>
                         ))}
                       </ul>

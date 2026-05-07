@@ -1,6 +1,38 @@
 const API_BASE = '/api'
 const interviewQuestionsInFlight = new Map()
 
+async function fetchWithEndpointFallback(
+  endpointCandidates,
+  { method = 'GET', headers, body, signal } = {}
+) {
+  let lastResponse = null
+  let lastError = null
+
+  for (const endpoint of endpointCandidates) {
+    try {
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        method,
+        headers,
+        body,
+        signal,
+      })
+
+      if (response.ok) return response
+
+      lastResponse = response
+      if (![404, 405, 500, 502, 503].includes(response.status)) {
+        return response
+      }
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  if (lastResponse) return lastResponse
+  if (lastError) throw lastError
+  throw new Error('요청을 처리할 수 없습니다.')
+}
+
 function requireAccessToken(accessToken) {
   if (!accessToken) {
     const error = new Error('인증 토큰이 필요합니다. 다시 로그인해주세요.')
@@ -73,22 +105,20 @@ export async function createCompanyInterviewQuestion(payload, accessToken) {
 }
 
 export async function createVideoInterviewQuestion(payload, accessToken) {
-  const primaryResponse = await fetch(`${API_BASE}/interviews/questions/video`, {
-    method: 'POST',
-    headers: buildHeaders(accessToken),
-    body: JSON.stringify(payload),
-  })
-
-  if (primaryResponse.status === 404) {
-    const fallbackResponse = await fetch(`${API_BASE}/interviews/me/video`, {
+  const response = await fetchWithEndpointFallback(
+    [
+      '/interviews/questions/video',
+      '/interviews/me/video',
+      '/interviews/video',
+      '/interviews/me/questions/video',
+    ],
+    {
       method: 'POST',
       headers: buildHeaders(accessToken),
       body: JSON.stringify(payload),
-    })
-    return handleResponse(fallbackResponse)
-  }
-
-  return handleResponse(primaryResponse)
+    }
+  )
+  return handleResponse(response)
 }
 
 export async function getInterviewQuestions({ type, userId } = {}, accessToken) {
@@ -238,8 +268,12 @@ export async function streamVideoInterviewResult(
   sessionId,
   { accessToken, signal, onOpen, onMessage, onError, onDone } = {}
 ) {
-  const response = await fetch(
-    `${API_BASE}/interviews/questions/video-answers/${sessionId}/stream`,
+  const response = await fetchWithEndpointFallback(
+    [
+      `/interviews/questions/video-answers/${sessionId}/stream`,
+      `/interviews/video-answers/${sessionId}/stream`,
+      `/interviews/me/video-answers/${sessionId}/stream`,
+    ],
     {
       method: 'GET',
       headers: buildHeaders(accessToken, { Accept: 'text/event-stream' }),

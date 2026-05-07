@@ -63,18 +63,6 @@ function getPreferredVideoMimeType() {
   return mimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || ''
 }
 
-const buildInterviewReport = (answersSnapshot) => {
-  return {
-    overallSummary: '모의 면접이 완료되었습니다. 서버 피드백 연동 시 상세 결과가 표시됩니다.',
-    overallScore: null,
-    questions: answersSnapshot.map((a, idx) => ({
-      index: idx + 1,
-      question: a.question,
-      duration: a.duration,
-    })),
-  }
-}
-
 function normalizeFinalVideoReport(payload, fallbackAnswers = []) {
   if (!payload || typeof payload !== 'object') return null
 
@@ -734,18 +722,11 @@ export default function MockInterview() {
     }
   }
 
-  // 답변 스냅샷 기반 최소 보고서 생성 (서버 결과 실패 시에만 사용)
-  const computeFinalFeedback = useCallback((snapshot) => {
-    const report = buildInterviewReport(snapshot)
-    setBehaviorAnalysis({ overall: 0 })
-    setInterviewReport(report)
-    setPhase('feedback')
-  }, [])
-
   const fetchFinalVideoResult = useCallback(async () => {
     const sessionId = videoSessionId
     if (!sessionId) {
-      computeFinalFeedback(answersSnapshotRef.current)
+      setErrorMessage('화상 면접 결과 세션이 없습니다. 다시 시도해주세요.')
+      setPhase('ready')
       return
     }
 
@@ -775,11 +756,11 @@ export default function MockInterview() {
     } catch (error) {
       console.error('[MockInterview] streamVideoInterviewResult error:', error)
       setErrorMessage(error?.message || '화상 면접 결과 조회에 실패했습니다.')
-      computeFinalFeedback(answersSnapshotRef.current)
+      setPhase('ready')
     } finally {
       analysisAbortRef.current = null
     }
-  }, [videoSessionId, getAccessToken, computeFinalFeedback])
+  }, [videoSessionId, getAccessToken])
 
   useEffect(() => {
     if (phase !== 'analyzing') return undefined

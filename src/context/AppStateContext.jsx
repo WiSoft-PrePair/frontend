@@ -345,101 +345,14 @@ export function AppProvider({children}) {
   /** API에서 질문을 불러오므로 컨텍스트에는 폴백 없음 */
   const getTodayQuestion = useCallback(() => null, [])
 
-  // Mock AI 피드백 생성
-  const generateMockFeedback = useCallback((question, answer) => {
-    const score = Math.floor(Math.random() * 25) + 70 // 70-95점
-    const breakdown = {
-      structure: Math.floor(Math.random() * 20) + 70,
-      clarity: Math.floor(Math.random() * 20) + 75,
-      depth: Math.floor(Math.random() * 20) + 70,
-      story: Math.floor(Math.random() * 20) + 65,
-    }
-
-    const summaries = [
-      '전반적으로 좋은 답변입니다. 구체적인 예시를 더 추가하면 좋겠습니다.',
-      '논리적인 구조가 잘 잡혀있습니다. 결과에 대한 수치화를 시도해보세요.',
-      'STAR 기법을 잘 활용했습니다. 개인의 역할을 더 강조해보세요.',
-      '명확한 답변이었습니다. 배운 점이나 성장 포인트를 추가하면 더 좋겠습니다.',
-    ]
-
-    const strengths = [
-      ['논리적인 흐름', '명확한 결론'],
-      ['구체적인 예시', '자신감 있는 표현'],
-      ['STAR 기법 활용', '긍정적인 마무리'],
-      ['문제 해결 과정 설명', '팀워크 강조'],
-    ]
-
-    const improvements = [
-      ['STAR 기법 활용', '수치화된 성과 추가'],
-      ['더 구체적인 상황 설명', '결과 강조'],
-      ['개인 역할 명확화', '교훈 추가'],
-      ['시간 순서 정리', '핵심 메시지 강화'],
-    ]
-
-    const idx = Math.floor(Math.random() * summaries.length)
-
-    return {
-      score,
-      breakdown,
-      summary: summaries[idx],
-      strengths: strengths[idx],
-      improvements: improvements[idx],
-      question: question?.text || question,
-      category: question?.category,
-      answer,
-      historyId: `h-${Date.now()}`,
-      earnedPoints: Math.max(40, Math.floor(score * 0.6)),
-    }
+  // 임시 목데이터 생성은 비활성화한다.
+  const generateMockFeedback = useCallback(() => {
+    throw new Error('목데이터 피드백이 비활성화되었습니다. API 연동을 사용해주세요.')
   }, [])
 
-  // AI 재피드백 생성 (기존 답변에 대해 다시 분석)
-  const generateReFeedback = useCallback((historyItem, updatedAnswer) => {
-    const answer = updatedAnswer || historyItem.answer
-    const score = Math.floor(Math.random() * 25) + 70
-    const breakdown = {
-      structure: Math.floor(Math.random() * 20) + 70,
-      clarity: Math.floor(Math.random() * 20) + 75,
-      depth: Math.floor(Math.random() * 20) + 70,
-      story: Math.floor(Math.random() * 20) + 65,
-    }
-
-    const reSummaries = [
-      '이전 답변보다 더 구체적인 예시가 추가되어 좋습니다.',
-      '논리 전개가 더욱 명확해졌습니다. 수치를 더 추가해보세요.',
-      '개선된 부분이 눈에 띕니다. STAR 기법을 더 활용해보세요.',
-      '성장이 보이는 답변입니다! 결론 부분을 더 강화하면 좋겠습니다.',
-    ]
-
-    const strengths = [
-      ['개선된 논리 구조', '더 명확한 표현'],
-      ['구체적인 수치 추가', '자연스러운 흐름'],
-      ['경험의 깊이 전달', '성장 포인트 강조'],
-      ['효과적인 스토리텔링', '인상적인 결론'],
-    ]
-
-    const improvements = [
-      ['시작 부분 더 임팩트 있게', '결과 강조'],
-      ['개인 기여도 더 명확히', '배운 점 구체화'],
-      ['상황 설명 더 간결하게', '핵심 메시지 부각'],
-      ['감정적 연결 추가', '미래 적용 계획'],
-    ]
-
-    const idx = Math.floor(Math.random() * reSummaries.length)
-
-    return {
-      score,
-      breakdown,
-      summary: reSummaries[idx],
-      strengths: strengths[idx],
-      improvements: improvements[idx],
-      question: historyItem.question,
-      category: historyItem.category,
-      answer,
-      historyId: `h-${Date.now()}`,
-      earnedPoints: Math.max(40, Math.floor(score * 0.6)),
-      isReFeedback: true,
-      originalHistoryId: historyItem.historyId,
-    }
+  // AI 재피드백도 API 연동 전까지 비활성화한다.
+  const generateReFeedback = useCallback(() => {
+    throw new Error('재피드백 목데이터가 비활성화되었습니다. API 연동을 사용해주세요.')
   }, [])
 
   // 면접 결과 기록
