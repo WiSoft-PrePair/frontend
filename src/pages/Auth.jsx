@@ -20,7 +20,9 @@ import {
 import {
   KAKAO_OAUTH_INTENT_KEY,
   KAKAO_PENDING_SIGNUP_KEY,
+  KAKAO_PROCESSED_OAUTH_CODE_KEY,
 } from '../constants/kakaoAuthSession'
+import { getKakaoRedirectUri } from '../utils/kakaoRedirectUri'
 
 const steps = [
   { id: 'account', label: '기본 정보' },
@@ -171,14 +173,21 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
   useEffect(() => {
     const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
     const code = searchParams.get('code') || hashParams.get('code')
-    if (!code || !code.trim()) return
+    const normalizedCode = code?.trim()
+    if (!normalizedCode) return
 
     setIsKakaoAuthenticating(true)
     setError('')
 
     const intent = sessionStorage.getItem(KAKAO_OAUTH_INTENT_KEY) || 'login'
+    const processedCode = sessionStorage.getItem(KAKAO_PROCESSED_OAUTH_CODE_KEY)
+    if (processedCode === normalizedCode) {
+      setIsKakaoAuthenticating(false)
+      return
+    }
+    sessionStorage.setItem(KAKAO_PROCESSED_OAUTH_CODE_KEY, normalizedCode)
 
-    kakaoCallback({ code })
+    kakaoCallback({ code: normalizedCode, redirectUri: getKakaoRedirectUri() })
       .then(async (response) => {
         const data = response?.data ?? response
 
@@ -241,6 +250,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
         navigate('/auth?mode=login', { replace: true })
       })
       .catch((err) => {
+        sessionStorage.removeItem(KAKAO_PROCESSED_OAUTH_CODE_KEY)
         sessionStorage.removeItem(KAKAO_OAUTH_INTENT_KEY)
         const message = err?.message || '카카오 로그인에 실패했습니다.'
         const isMemberNotFound =
@@ -480,7 +490,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     sessionStorage.setItem(KAKAO_OAUTH_INTENT_KEY, 'signup')
     setIsKakaoAuthenticating(true)
     try {
-      const res = await kakaoPromptLogin('login')
+      const res = await kakaoPromptLogin('login', getKakaoRedirectUri())
       const url = res?.data?.url ?? res?.url
       if (!url) throw new Error('카카오 로그인 URL을 받지 못했습니다.')
       window.location.href = url
@@ -496,7 +506,7 @@ const [temporaryPassword, setTemporaryPassword] = useState('')
     setError('')
     sessionStorage.setItem(KAKAO_OAUTH_INTENT_KEY, 'login')
     setIsKakaoAuthenticating(true)
-    kakaoPromptLogin('login')
+    kakaoPromptLogin('login', getKakaoRedirectUri())
       .then((res) => {
         const url = res?.data?.url ?? res?.url
         if (!url) throw new Error('카카오 로그인 URL을 받지 못했습니다.')

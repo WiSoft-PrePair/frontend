@@ -172,12 +172,17 @@ export async function refreshToken(payload) {
 /**
  * OAuth 카카오 로그인/회원가입 시작 (prompt-login)
  * 백엔드가 카카오 인증 URL을 생성해주면, 프론트는 해당 URL로만 리다이렉트합니다.
- * 명세: GET /api/auth/kakao/url?prompt=login
+ * 명세: GET /api/auth/kakao/url?prompt=login&redirectUri=...
+ *
+ * redirectUri를 명시 전달해야 백엔드가 화이트리스트 검증을 거쳐
+ * 현재 origin으로 카카오 인가 URL을 만들어 준다. 미전달 시 백엔드의 default
+ * (운영 도메인)로 떨어져 로컬 dev 세션이 인가 직후 운영 origin으로 이탈한다.
  */
-export async function kakaoPromptLogin(prompt = 'login') {
+export async function kakaoPromptLogin(prompt = 'login', redirectUri) {
   try {
     const params = new URLSearchParams()
     if (prompt) params.set('prompt', prompt)
+    if (redirectUri) params.set('redirectUri', redirectUri)
     const url = `${API_BASE}/auth/kakao/url?${params.toString()}`
     const response = await fetch(url, {
       method: 'GET',

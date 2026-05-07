@@ -45,6 +45,18 @@ const DEFAULT_OPTIONS = {
 }
 
 const MAX_TEXT_LENGTH = 600
+const VALID_OPENAI_VOICES = new Set([
+  'alloy',
+  'ash',
+  'ballad',
+  'coral',
+  'echo',
+  'fable',
+  'onyx',
+  'nova',
+  'sage',
+  'shimmer',
+])
 
 /**
  * 텍스트를 음성으로 변환
@@ -64,7 +76,12 @@ export async function textToSpeech(text, options = {}, signal = null) {
 
   const speakerKey = options.speaker || DEFAULT_OPTIONS.speaker
   const speakerInfo = TTS_SPEAKERS[speakerKey]
-  const voice = speakerInfo?.voice || TTS_SPEAKERS.sohee.voice
+  const fallbackVoice = TTS_SPEAKERS[DEFAULT_OPTIONS.speaker]?.voice || 'alloy'
+  const rawVoice = speakerInfo?.voice || fallbackVoice
+  const voice = VALID_OPENAI_VOICES.has(rawVoice) ? rawVoice : fallbackVoice
+  if (!VALID_OPENAI_VOICES.has(rawVoice)) {
+    console.warn(`[ttsApi] unsupported voice "${rawVoice}", fallback to "${fallbackVoice}"`)
+  }
 
   const params = {
     text: text.trim(),
@@ -73,14 +90,33 @@ export async function textToSpeech(text, options = {}, signal = null) {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/tts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(params),
-      signal,
-    })
+    const endpoints = [`${API_BASE}/tts`, `${API_BASE}/interviews/tts`]
+    let response = null
+    let lastResponse = null
+
+    for (const endpoint of endpoints) {
+      const candidate = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+        signal,
+      })
+
+      if (candidate.ok) {
+        response = candidate
+        break
+      }
+
+      lastResponse = candidate
+      if (candidate.status !== 404) {
+        response = candidate
+        break
+      }
+    }
+
+    response = response || lastResponse
 
     if (!response.ok) {
       const rawText = await response.text()

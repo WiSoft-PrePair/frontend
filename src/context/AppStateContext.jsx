@@ -3,13 +3,8 @@ import {
   jobTracks,
   cadencePresets,
   scoringRubric,
-  mockQuestions,
-  mockScoreHistory,
-  mockCompanyHistory,
-  getMockActivity,
-  mockPurchases,
   PRO_PLANS,
-} from '../data/mockDataForDemo'
+} from '../data/appConstants'
 import * as memberApi from '../utils/memberApi'
 
 const AppStateContext = createContext(null)
@@ -24,6 +19,11 @@ const STORAGE_COMPANY_HISTORY_KEY = 'prepair_company_history'
 const STORAGE_ACTIVITY_KEY = 'prepair_activity'
 const STORAGE_PURCHASES_KEY = 'prepair_purchases'
 const STORAGE_PRO_USAGE_KEY = 'prepair_pro_usage'
+
+/** 활동 히트맵 빈 그리드 (53주 × 7일) */
+function emptyActivityHeatmap() {
+  return Array.from({ length: 53 }, () => Array(7).fill(0))
+}
 
 /** 로그인·/auth/me 등 응답에서 member 페이로드 추출 (중첩 member, member_info 등 지원) */
 function extractApiUser(response) {
@@ -57,9 +57,9 @@ export function AppProvider({children}) {
   const [scoreHistory, setScoreHistory] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_HISTORY_KEY)
-      return saved ? JSON.parse(saved) : mockScoreHistory
+      return saved ? JSON.parse(saved) : []
     } catch {
-      return mockScoreHistory
+      return []
     }
   })
 
@@ -68,12 +68,11 @@ export function AppProvider({children}) {
       const saved = localStorage.getItem(STORAGE_COMPANY_HISTORY_KEY)
       if (saved) {
         const parsed = JSON.parse(saved)
-        // 빈 배열이면 목데이터 사용, 아니면 저장된 데이터 사용
-        return Array.isArray(parsed) && parsed.length > 0 ? parsed : mockCompanyHistory
+        return Array.isArray(parsed) ? parsed : []
       }
-      return mockCompanyHistory
+      return []
     } catch {
-      return mockCompanyHistory
+      return []
     }
   })
 
@@ -82,18 +81,18 @@ export function AppProvider({children}) {
   const [activity, setActivity] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_ACTIVITY_KEY)
-      return saved ? JSON.parse(saved) : getMockActivity()
+      return saved ? JSON.parse(saved) : emptyActivityHeatmap()
     } catch {
-      return getMockActivity()
+      return emptyActivityHeatmap()
     }
   })
 
   const [purchases, setPurchases] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_PURCHASES_KEY)
-      return saved ? JSON.parse(saved) : mockPurchases
+      return saved ? JSON.parse(saved) : []
     } catch {
-      return mockPurchases
+      return []
     }
   })
 
@@ -320,12 +319,14 @@ export function AppProvider({children}) {
       setCurrentQuestion(null)
       setLastFeedback(null)
       setScoreHistory([])
-      setActivity(getMockActivity())
+      setCompanyHistory([])
+      setActivity(emptyActivityHeatmap())
       setPurchases([])
       authStorage.removeItem(STORAGE_KEY)
       authStorage.removeItem(STORAGE_ACCESS_TOKEN_KEY)
       authStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY)
       localStorage.removeItem(STORAGE_HISTORY_KEY)
+      localStorage.removeItem(STORAGE_COMPANY_HISTORY_KEY)
       localStorage.removeItem(STORAGE_ACTIVITY_KEY)
       localStorage.removeItem(STORAGE_PURCHASES_KEY)
     } catch (error) {
@@ -341,11 +342,8 @@ export function AppProvider({children}) {
     setUser(prev => prev ? {...prev, ...updates} : null)
   }, [])
 
-  // Mock 오늘의 질문 가져오기
-  const getTodayQuestion = useCallback(() => {
-    const randomIndex = Math.floor(Math.random() * mockQuestions.length)
-    return mockQuestions[randomIndex]
-  }, [])
+  /** API에서 질문을 불러오므로 컨텍스트에는 폴백 없음 */
+  const getTodayQuestion = useCallback(() => null, [])
 
   // Mock AI 피드백 생성
   const generateMockFeedback = useCallback((question, answer) => {
@@ -569,7 +567,7 @@ export function AppProvider({children}) {
   }, [isPro, canUseJobPost])
 
   const upgradeToPro = useCallback(() => {
-    // Mock 업그레이드 (실제로는 결제 처리)
+    // 결제 연동 전까지 클라이언트에서 Pro 적용
     setUser(prev => prev ? { ...prev, plan: 'pro' } : null)
     return { success: true }
   }, [])
@@ -602,7 +600,6 @@ export function AppProvider({children}) {
     jobTracks,
     cadencePresets,
     scoringRubric,
-    mockQuestions,
     PRO_PLANS,
 
     // Actions

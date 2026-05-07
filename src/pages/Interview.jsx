@@ -13,13 +13,6 @@ import {
 import '../styles/pages/Interview.css'
 import '../styles/components/pro-upgrade.css'
 
-const scoringCategories = [
-  { id: 'structure', label: '구조화', description: 'MECE한 논리 전개', icon: '🏗️' },
-  { id: 'clarity', label: '명료성', description: '핵심 메시지 명확성', icon: '💡' },
-  { id: 'depth', label: '깊이', description: '근거, 데이터, 인사이트', icon: '🔍' },
-  { id: 'story', label: '스토리텔링', description: '서사와 몰입감', icon: '📖' },
-]
-
 // 육각형 차트 카테고리
 const hexagonCategories = [
   { id: 'proactivity', label: '적극성', angle: -90 },
@@ -226,6 +219,7 @@ function analyzeStrengthsWeaknesses(scores) {
 }
 
 const VALID_TABS = ['practice', 'history', 'mock', 'jobpost']
+const JOB_POST_HISTORY_STORAGE_KEY = 'prepair_job_post_history'
 
 function normalizeQuestion(raw, fallbackId = Date.now()) {
   if (!raw || typeof raw !== 'object') return null
@@ -233,6 +227,7 @@ function normalizeQuestion(raw, fallbackId = Date.now()) {
     id: raw.id ?? raw.questionId ?? raw.question_id ?? fallbackId,
     text: raw.text ?? raw.question ?? raw.content ?? '',
     category: raw.category ?? raw.type ?? '일반',
+    source: 'api',
   }
 }
 
@@ -283,7 +278,15 @@ function normalizeCompanyQuestions(list = []) {
     text: item?.question ?? item?.text ?? '',
     relevance: item?.questionTag ?? '',
     questionId: item?.id,
+    source: 'api',
   }))
+}
+
+function isUuid(value) {
+  if (typeof value !== 'string') return false
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  )
 }
 
 function toFeedbackList(value) {
@@ -292,10 +295,24 @@ function toFeedbackList(value) {
   return [String(value)]
 }
 
-function normalizeFeedbackResponse(response, question, answer, fallbackFactory) {
+function loadJobPostHistoryFromStorage() {
+  if (typeof window === 'undefined') return []
+  try {
+    const saved = localStorage.getItem(JOB_POST_HISTORY_STORAGE_KEY)
+    if (!saved) return []
+    const parsed = JSON.parse(saved)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function normalizeFeedbackResponse(response, question, answer) {
   const payload = response?.data ?? response ?? {}
   const score = payload?.score ?? payload?.totalScore ?? payload?.overallScore
-  if (typeof score !== 'number') return fallbackFactory(question, answer)
+  if (typeof score !== 'number') {
+    throw new Error('피드백 응답 형식이 올바르지 않습니다.')
+  }
 
   const feedback = payload?.feedback ?? {}
   const strengths = toFeedbackList(payload?.strengths ?? payload?.pros ?? feedback?.good)
@@ -327,7 +344,7 @@ function normalizeFeedbackResponse(response, question, answer, fallbackFactory) 
 }
 
 export default function CoachPage() {
-  const { user, recordInterviewResult, lastFeedback, getTodayQuestion, generateMockFeedback, generateReFeedback, scoreHistory, companyHistory, isPro, canUseMockInterview, canUseJobPost, useMockInterview, useJobPost, getAccessToken } = useAppState()
+  const { user, recordInterviewResult, lastFeedback, generateReFeedback, scoreHistory, companyHistory, isPro, canUseMockInterview, canUseJobPost, useMockInterview, useJobPost, getAccessToken } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()
@@ -339,6 +356,17 @@ export default function CoachPage() {
   const [histories, setHistories] = useState([])
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(true)
   const [error, setError] = useState('')
+
+  const resolveAccessToken = useCallback(() => {
+    const tokenFromContext = getAccessToken?.()
+    if (tokenFromContext) return tokenFromContext
+    if (typeof window === 'undefined') return null
+    return (
+      window.sessionStorage.getItem('prepair_access_token') ||
+      window.localStorage.getItem('prepair_access_token') ||
+      null
+    )
+  }, [getAccessToken])
 
   // Get active tab from URL, default to 'practice'
   const tabParam = searchParams.get('tab')
@@ -405,162 +433,7 @@ export default function CoachPage() {
   const [jobAnswer, setJobAnswer] = useState('')
   const [isSubmittingJobAnswer, setIsSubmittingJobAnswer] = useState(false)
   const [jobFeedback, setJobFeedback] = useState(null)
-  const [jobPostHistory, setJobPostHistory] = useState([
-    {
-      id: 1,
-      url: 'https://career.naver.com/123',
-      company: '네이버',
-      position: '백엔드 개발자',
-      department: '검색플랫폼',
-      keywords: ['Java', 'Spring', 'MSA'],
-      date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 1).toISOString(),
-      analysis: {
-        company: '네이버',
-        position: '백엔드 개발자',
-        department: '검색플랫폼',
-        requirements: ['Java/Kotlin 기반 서버 개발 경험 3년 이상', '대용량 트래픽 처리 경험', 'Spring Framework 활용 능력'],
-        preferredQualifications: ['Kubernetes/Docker 경험', '검색 엔진 관련 경험'],
-        keywords: ['Java', 'Spring', 'MSA'],
-      },
-      questions: [
-        { id: 1, category: '기술', text: '대용량 트래픽을 처리했던 경험에 대해 설명해주세요.', relevance: '대용량 트래픽 처리 경험 기반' },
-        { id: 2, category: '기술', text: 'MSA 아키텍처의 장단점과 적용 경험을 설명해주세요.', relevance: 'MSA 아키텍처 이해 기반' },
-        { id: 3, category: '경험', text: 'Spring Framework로 해결한 가장 어려운 문제는 무엇인가요?', relevance: 'Spring Framework 활용 능력 기반' },
-      ],
-    },
-    {
-      id: 2,
-      url: 'https://www.wanted.co.kr/456',
-      company: '카카오',
-      position: '프론트엔드 개발자',
-      department: '카카오톡',
-      keywords: ['React', 'TypeScript', 'Next.js'],
-      date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 2).toISOString(),
-      analysis: {
-        company: '카카오',
-        position: '프론트엔드 개발자',
-        department: '카카오톡',
-        requirements: ['React 개발 경험 2년 이상', 'TypeScript 능숙', '웹 성능 최적화 경험'],
-        preferredQualifications: ['Next.js 경험', '모바일 웹 개발 경험'],
-        keywords: ['React', 'TypeScript', 'Next.js'],
-      },
-      questions: [
-        { id: 1, category: '기술', text: 'React에서 상태 관리를 어떻게 하시나요?', relevance: 'React 개발 경험 기반' },
-        { id: 2, category: '기술', text: '웹 성능 최적화를 위해 어떤 방법을 사용하셨나요?', relevance: '웹 성능 최적화 경험 기반' },
-        { id: 3, category: '경험', text: 'TypeScript 도입으로 얻은 이점은 무엇인가요?', relevance: 'TypeScript 능숙 기반' },
-      ],
-    },
-    {
-      id: 3,
-      url: 'https://careers.linecorp.com/789',
-      company: '라인',
-      position: '서버 개발자',
-      department: '메신저개발',
-      keywords: ['Kotlin', 'Spring Boot', 'Redis'],
-      date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString(),
-      analysis: {
-        company: '라인',
-        position: '서버 개발자',
-        department: '메신저개발',
-        requirements: ['Kotlin/Java 서버 개발 경험', 'Spring Boot 활용 능력', '캐싱 시스템 경험'],
-        preferredQualifications: ['메신저 서비스 개발 경험', '글로벌 서비스 경험'],
-        keywords: ['Kotlin', 'Spring Boot', 'Redis'],
-      },
-      questions: [
-        { id: 1, category: '기술', text: 'Kotlin과 Java의 차이점과 Kotlin을 선호하는 이유는?', relevance: 'Kotlin/Java 서버 개발 경험 기반' },
-        { id: 2, category: '기술', text: 'Redis를 활용한 캐싱 전략에 대해 설명해주세요.', relevance: '캐싱 시스템 경험 기반' },
-        { id: 3, category: '경험', text: '실시간 메시징 시스템 설계 경험이 있으신가요?', relevance: '메신저 서비스 개발 경험 기반' },
-      ],
-    },
-    {
-      id: 4,
-      url: 'https://www.samsungcareers.com/101',
-      company: '삼성전자',
-      position: 'SW 엔지니어',
-      department: '무선사업부',
-      keywords: ['C++', 'Android', 'Embedded'],
-      date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
-      analysis: {
-        company: '삼성전자',
-        position: 'SW 엔지니어',
-        department: '무선사업부',
-        requirements: ['C/C++ 프로그래밍 능력', 'Android Framework 이해', '임베디드 시스템 개발 경험'],
-        preferredQualifications: ['모바일 디바이스 개발 경험', '성능 최적화 경험'],
-        keywords: ['C++', 'Android', 'Embedded'],
-      },
-      questions: [
-        { id: 1, category: '기술', text: 'C++에서 메모리 관리를 어떻게 하시나요?', relevance: 'C/C++ 프로그래밍 능력 기반' },
-        { id: 2, category: '기술', text: 'Android Framework의 구조에 대해 설명해주세요.', relevance: 'Android Framework 이해 기반' },
-        { id: 3, category: '경험', text: '임베디드 환경에서의 디버깅 경험을 공유해주세요.', relevance: '임베디드 시스템 개발 경험 기반' },
-      ],
-    },
-    {
-      id: 5,
-      url: 'https://careers.google.com/202',
-      company: '구글코리아',
-      position: 'Software Engineer',
-      department: 'Cloud',
-      keywords: ['Go', 'Kubernetes', 'GCP'],
-      date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
-      analysis: {
-        company: '구글코리아',
-        position: 'Software Engineer',
-        department: 'Cloud',
-        requirements: ['분산 시스템 설계 경험', '클라우드 인프라 이해', '알고리즘 및 자료구조 역량'],
-        preferredQualifications: ['Go 언어 경험', 'Kubernetes 운영 경험'],
-        keywords: ['Go', 'Kubernetes', 'GCP'],
-      },
-      questions: [
-        { id: 1, category: '기술', text: '분산 시스템에서 일관성을 유지하는 방법은?', relevance: '분산 시스템 설계 경험 기반' },
-        { id: 2, category: '기술', text: 'Kubernetes의 핵심 컴포넌트에 대해 설명해주세요.', relevance: 'Kubernetes 운영 경험 기반' },
-        { id: 3, category: '알고리즘', text: '시간 복잡도 O(n log n) 정렬 알고리즘을 설명해주세요.', relevance: '알고리즘 및 자료구조 역량 기반' },
-      ],
-    },
-    {
-      id: 6,
-      url: 'https://toss.im/career/303',
-      company: '토스',
-      position: '서버 개발자',
-      department: '토스뱅크',
-      keywords: ['Java', 'Spring', 'AWS'],
-      date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 10).toISOString(),
-      analysis: {
-        company: '토스',
-        position: '서버 개발자',
-        department: '토스뱅크',
-        requirements: ['Java/Kotlin 서버 개발 경험', '금융 도메인 이해', 'AWS 인프라 경험'],
-        preferredQualifications: ['핀테크 서비스 개발 경험', '보안 시스템 이해'],
-        keywords: ['Java', 'Spring', 'AWS'],
-      },
-      questions: [
-        { id: 1, category: '기술', text: '금융 서비스에서 트랜잭션 처리를 어떻게 하시나요?', relevance: '금융 도메인 이해 기반' },
-        { id: 2, category: '기술', text: 'AWS에서 고가용성을 확보하는 방법은?', relevance: 'AWS 인프라 경험 기반' },
-        { id: 3, category: '경험', text: '보안이 중요한 서비스 개발 경험을 공유해주세요.', relevance: '보안 시스템 이해 기반' },
-      ],
-    },
-    {
-      id: 7,
-      url: 'https://www.coupang.jobs/404',
-      company: '쿠팡',
-      position: '백엔드 개발자',
-      department: '물류시스템',
-      keywords: ['Java', 'AWS', '대용량 트래픽'],
-      date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 14).toISOString(),
-      analysis: {
-        company: '쿠팡',
-        position: '백엔드 개발자',
-        department: '물류시스템',
-        requirements: ['Java 기반 대규모 시스템 개발', '대용량 데이터 처리 경험', 'AWS 서비스 활용'],
-        preferredQualifications: ['이커머스 도메인 경험', '물류 시스템 이해'],
-        keywords: ['Java', 'AWS', '대용량 트래픽'],
-      },
-      questions: [
-        { id: 1, category: '기술', text: '대용량 데이터 처리 시 고려해야 할 점은?', relevance: '대용량 데이터 처리 경험 기반' },
-        { id: 2, category: '기술', text: '이커머스 서비스의 트래픽 급증에 대응한 경험이 있나요?', relevance: '이커머스 도메인 경험 기반' },
-        { id: 3, category: '경험', text: '물류 시스템의 실시간 처리 경험을 공유해주세요.', relevance: '물류 시스템 이해 기반' },
-      ],
-    },
-  ])
+  const [jobPostHistory, setJobPostHistory] = useState(() => loadJobPostHistoryFromStorage())
   const [jobPostHistoryPage, setJobPostHistoryPage] = useState(1)
   const [jobPostSearchQuery, setJobPostSearchQuery] = useState('')
   const JOB_POST_ITEMS_PER_PAGE = isMobile ? 3 : 5
@@ -582,6 +455,11 @@ export default function CoachPage() {
 
   const textareaRef = useRef(null)
   const editTextareaRef = useRef(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem(JOB_POST_HISTORY_STORAGE_KEY, JSON.stringify(jobPostHistory))
+  }, [jobPostHistory])
 
   // Filter histories by search query
   const filteredHistories = histories.filter((item) => {
@@ -607,7 +485,7 @@ export default function CoachPage() {
   }
 
   const fetchTextQuestion = useCallback(async () => {
-    const accessToken = getAccessToken?.()
+    const accessToken = resolveAccessToken()
     try {
       const response = await getInterviewQuestions(
         { type: 'TEXT', userId: user?.id },
@@ -623,9 +501,9 @@ export default function CoachPage() {
       console.error('[Interview] fetchTextQuestion error:', err)
     }
 
-    // API 실패/빈 응답 시 기존 목업 질문으로 폴백
-    setQuestion(getTodayQuestion())
-  }, [getAccessToken, getTodayQuestion, user?.id])
+    // API 실패/빈 응답 시 질문 없음
+    setQuestion(null)
+  }, [resolveAccessToken, user?.id])
 
   // Fetch today's question (TEXT API 우선)
   useEffect(() => {
@@ -634,7 +512,7 @@ export default function CoachPage() {
     fetchTextQuestion().finally(() => setIsLoadingQuestion(false))
   }, [user?.id, fetchTextQuestion])
 
-  // Load history from context (mock data)
+  // 히스토리는 컨텍스트(로컬 저장)에서 로드
   useEffect(() => {
     if (activeTab === 'history') {
       if (historySubTab === 'company') {
@@ -687,25 +565,21 @@ export default function CoachPage() {
     setIsSubmitting(true)
     setError('')
     try {
-      const accessToken = getAccessToken?.()
+      if (!(question?.source === 'api' && isUuid(String(question.id)))) {
+        throw new Error('유효한 API 질문이 아닙니다. 새로운 질문을 불러와 주세요.')
+      }
+
+      const accessToken = resolveAccessToken()
       const response = await submitTextInterviewAnswer(
         question.id,
         { answer: answer.trim() },
         accessToken
       )
-      const feedbackData = normalizeFeedbackResponse(
-        response,
-        question,
-        answer.trim(),
-        generateMockFeedback
-      )
+      const feedbackData = normalizeFeedbackResponse(response, question, answer.trim())
       setFeedback(feedbackData)
       recordInterviewResult(feedbackData)
     } catch (err) {
-      const fallbackFeedback = generateMockFeedback(question, answer.trim())
-      setFeedback(fallbackFeedback)
-      recordInterviewResult(fallbackFeedback)
-      setError(err?.message || '답변 제출에 실패하여 목업 피드백으로 대체했습니다.')
+      setError(err?.message || '답변 제출에 실패했습니다.')
     } finally {
       setIsSubmitting(false)
     }
@@ -789,7 +663,7 @@ export default function CoachPage() {
 
     setError('')
     try {
-      const accessToken = getAccessToken?.()
+      const accessToken = resolveAccessToken()
       const response = await createCompanyInterviewQuestion(
         { url: jobPostUrl.trim() },
         accessToken
@@ -807,7 +681,7 @@ export default function CoachPage() {
 
       const historyItem = {
         id: payload?.jobPosting?.id ?? Date.now(),
-        url: jobPostUrl,
+        url: jobPostUrl.trim(),
         company: normalizedAnalysis.company,
         position: normalizedAnalysis.position,
         department: normalizedAnalysis.department,
@@ -861,22 +735,28 @@ export default function CoachPage() {
     setError('')
 
     try {
-      const accessToken = getAccessToken?.()
-      const response = await submitTextInterviewAnswer(
-        selectedJobQuestion.questionId || selectedJobQuestion.id,
-        { answer: jobAnswer.trim() },
-        accessToken
-      )
+      const resolvedQuestionId = selectedJobQuestion.questionId || selectedJobQuestion.id
+      const shouldCallApi =
+        selectedJobQuestion?.source === 'api' && isUuid(String(resolvedQuestionId))
+
+      if (!shouldCallApi) {
+        throw new Error('유효한 API 질문이 아닙니다. 공고를 다시 분석해 주세요.')
+      }
+
       const feedbackData = normalizeFeedbackResponse(
-        response,
+        await submitTextInterviewAnswer(
+          resolvedQuestionId,
+          { answer: jobAnswer.trim() },
+          resolveAccessToken()
+        ),
         {
           id: selectedJobQuestion.id,
           text: selectedJobQuestion.text,
           category: selectedJobQuestion.category,
         },
-        jobAnswer.trim(),
-        generateMockFeedback
+        jobAnswer.trim()
       )
+
       setJobFeedback(feedbackData)
       recordInterviewResult({
         ...feedbackData,
@@ -886,19 +766,7 @@ export default function CoachPage() {
       })
       window.history.pushState({ jobpostStep: 'feedback' }, '')
     } catch (err) {
-      const fallbackFeedback = generateMockFeedback(
-        { id: selectedJobQuestion.id, text: selectedJobQuestion.text, category: selectedJobQuestion.category },
-        jobAnswer.trim()
-      )
-      setJobFeedback(fallbackFeedback)
-      recordInterviewResult({
-        ...fallbackFeedback,
-        source: 'jobpost',
-        company: jobPostAnalysis?.company,
-        position: jobPostAnalysis?.position,
-      })
-      setError(err?.message || '답변 제출에 실패하여 목업 피드백으로 대체했습니다.')
-      window.history.pushState({ jobpostStep: 'feedback' }, '')
+      setError(err?.message || '답변 제출에 실패했습니다.')
     } finally {
       setIsSubmittingJobAnswer(false)
     }
@@ -1094,25 +962,6 @@ export default function CoachPage() {
                       </div>
                     </div>
 
-                    <div className="coach__score-breakdown">
-                      {scoringCategories.map((cat) => (
-                        <div key={cat.id} className="coach__score-item">
-                          <div className="coach__score-item-header">
-                            <span>{cat.icon} {cat.label}</span>
-                            <strong>{feedback.breakdown?.[cat.id] || 75}점</strong>
-                          </div>
-                          <div className="coach__score-bar">
-                            <div
-                              className="coach__score-bar-fill"
-                              style={{
-                                width: `${feedback.breakdown?.[cat.id] || 75}%`,
-                                background: getScoreColor(feedback.breakdown?.[cat.id] || 75),
-                              }}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
                   </div>
 
                   {/* Feedback Details */}
@@ -1792,25 +1641,6 @@ export default function CoachPage() {
                           </div>
                         </div>
 
-                        <div className="coach__score-breakdown">
-                          {scoringCategories.map((cat) => (
-                            <div key={cat.id} className="coach__score-item">
-                              <div className="coach__score-item-header">
-                                <span>{cat.icon} {cat.label}</span>
-                                <strong>{jobFeedback.breakdown?.[cat.id] || 75}점</strong>
-                              </div>
-                              <div className="coach__score-bar">
-                                <div
-                                  className="coach__score-bar-fill"
-                                  style={{
-                                    width: `${jobFeedback.breakdown?.[cat.id] || 75}%`,
-                                    background: getScoreColor(jobFeedback.breakdown?.[cat.id] || 75),
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
                       </div>
 
                       {/* Feedback Details */}

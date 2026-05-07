@@ -1,4 +1,14 @@
 const API_BASE = '/api'
+const interviewQuestionsInFlight = new Map()
+
+function requireAccessToken(accessToken) {
+  if (!accessToken) {
+    const error = new Error('인증 토큰이 필요합니다. 다시 로그인해주세요.')
+    error.statusCode = 401
+    throw error
+  }
+  return accessToken
+}
 
 function pickApiErrorMessage(errorData) {
   if (!errorData || typeof errorData !== 'object') return null
@@ -17,12 +27,22 @@ function pickApiErrorMessage(errorData) {
 
 async function handleResponse(response) {
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
+    const rawText = await response.text()
+    let errorData = {}
+    try {
+      errorData = rawText ? JSON.parse(rawText) : {}
+    } catch {
+      errorData = {}
+    }
+    const fallbackMessage = typeof rawText === 'string' && rawText.trim()
+      ? rawText.trim().slice(0, 300)
+      : '요청 처리 중 오류가 발생했습니다.'
     const error = new Error(
-      pickApiErrorMessage(errorData) || '요청 처리 중 오류가 발생했습니다.'
+      pickApiErrorMessage(errorData) || fallbackMessage
     )
     error.statusCode = response.status
     error.isServerError = response.status >= 500
+    error.details = errorData
     throw error
   }
 
@@ -34,11 +54,12 @@ async function handleResponse(response) {
 }
 
 function buildHeaders(accessToken, extraHeaders = {}) {
+  const resolvedAccessToken = requireAccessToken(accessToken)
   const headers = {
     'Content-Type': 'application/json',
     ...extraHeaders,
   }
-  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+  headers.Authorization = `Bearer ${resolvedAccessToken}`
   return headers
 }
 
@@ -52,14 +73,14 @@ export async function createCompanyInterviewQuestion(payload, accessToken) {
 }
 
 export async function createVideoInterviewQuestion(payload, accessToken) {
-  const primaryResponse = await fetch(`${API_BASE}/interviews/me/video`, {
+  const primaryResponse = await fetch(`${API_BASE}/interviews/questions/video`, {
     method: 'POST',
     headers: buildHeaders(accessToken),
     body: JSON.stringify(payload),
   })
 
   if (primaryResponse.status === 404) {
-    const fallbackResponse = await fetch(`${API_BASE}/interviews/questions/video`, {
+    const fallbackResponse = await fetch(`${API_BASE}/interviews/me/video`, {
       method: 'POST',
       headers: buildHeaders(accessToken),
       body: JSON.stringify(payload),
@@ -71,30 +92,74 @@ export async function createVideoInterviewQuestion(payload, accessToken) {
 }
 
 export async function getInterviewQuestions({ type, userId } = {}, accessToken) {
-  const params = new URLSearchParams()
-  if (type) params.set('type', type)
-  const query = params.toString()
+  const requestKey = JSON.stringify({
+    type: type ?? null,
+    userId: userId ?? null,
+    hasToken: Boolean(accessToken),
+  })
 
-  const primaryResponse = await fetch(
-    `${API_BASE}/interviews/me/questions${query ? `?${query}` : ''}`,
-    {
+  const existingRequest = interviewQuestionsInFlight.get(requestKey)
+  if (existingRequest) return existingRequest
+
+  const requestPromise = (async () => {
+    const params = new URLSearchParams()
+    if (type) params.set('type', type)
+    const query = params.toString()
+    const headers = buildHeaders(accessToken, userId ? { 'X-User-Id': userId } : {})
+
+    const typedQuestionsUrl = `${API_BASE}/interviews/questions${query ? `?${query}` : ''}`
+    const meTypedQuestionsUrl = `${API_BASE}/interviews/me/questions${query ? `?${query}` : ''}`
+    const rawQuestionsUrl = `${API_BASE}/interviews/questions`
+
+    let lastError = null
+
+    // 현재 백엔드에서 가장 안정적인 경로를 우선 사용한다.
+    const primaryResponse = await fetch(typedQuestionsUrl, {
       method: 'GET',
-      headers: buildHeaders(accessToken, userId ? { 'X-User-Id': userId } : {}),
+      headers,
+    })
+
+    if (primaryResponse.ok) {
+      return handleResponse(primaryResponse)
     }
-  )
+    lastError = await primaryResponse.json().catch(() => ({}))
 
-  if (primaryResponse.status === 404) {
-    const fallbackResponse = await fetch(
-      `${API_BASE}/interviews/questions${query ? `?${query}` : ''}`,
-      {
+    // 타입 값 미지원(400)일 때만 타입 없는 경로로 한번 재시도한다.
+    if (primaryResponse.status === 400 && type) {
+      const rawResponse = await fetch(rawQuestionsUrl, {
         method: 'GET',
-        headers: buildHeaders(accessToken, userId ? { 'X-User-Id': userId } : {}),
+        headers,
+      })
+      if (rawResponse.ok) {
+        return handleResponse(rawResponse)
       }
-    )
-    return handleResponse(fallbackResponse)
-  }
+      lastError = await rawResponse.json().catch(() => ({}))
+    }
 
-  return handleResponse(primaryResponse)
+    // 엔드포인트 차이(404) 상황에서만 /me 변형으로 폴백한다.
+    if (primaryResponse.status === 404) {
+      const meResponse = await fetch(meTypedQuestionsUrl, {
+        method: 'GET',
+        headers,
+      })
+      if (meResponse.ok) {
+        return handleResponse(meResponse)
+      }
+      lastError = await meResponse.json().catch(() => ({}))
+    }
+
+    if (lastError instanceof Error) throw lastError
+    const error = new Error(pickApiErrorMessage(lastError) || '면접 질문 조회에 실패했습니다.')
+    error.statusCode = 500
+    throw error
+  })()
+
+  interviewQuestionsInFlight.set(requestKey, requestPromise)
+  try {
+    return await requestPromise
+  } finally {
+    interviewQuestionsInFlight.delete(requestKey)
+  }
 }
 
 export async function getInterviewQuestionDetail(questionId, accessToken) {
@@ -120,8 +185,9 @@ export async function submitVideoInterviewAnswer(questionId, payload, accessToke
     formData.append('video', payload.video)
   }
 
-  const headers = {}
-  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+  const headers = {
+    Authorization: `Bearer ${requireAccessToken(accessToken)}`,
+  }
 
   const response = await fetch(
     `${API_BASE}/interviews/questions/${questionId}/video-answers`,
@@ -148,6 +214,10 @@ function parseSseEventBlock(block) {
     }
     if (line.startsWith('data:')) {
       dataLines.push(line.slice(5).trimStart())
+      continue
+    }
+    if (!line.startsWith('id:') && !line.startsWith('retry:')) {
+      dataLines.push(line)
     }
   }
 

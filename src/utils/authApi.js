@@ -1,19 +1,5 @@
 const API_BASE = '/api'
 
-const TEST_EMAILS = ['test/test', 'admin/admin', 'demo/demo']
-
-// 테스트용 이메일 확인 함수
-function isTestEmail(email) {
-  if (!email) return false
-  const normalized = email.toLowerCase().trim()
-  return TEST_EMAILS.some(testEmail => testEmail.toLowerCase() === normalized)
-}
-
-// 모의 지연 (실제 API 호출처럼 느끼게)
-function mockDelay(ms = 500) {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
 // 에러 처리 헬퍼
 async function handleResponse(response) {
   if (!response.ok) {
@@ -121,12 +107,6 @@ export async function updateProfileApi(userId, updates) {
 
 // 아이디 찾기 (이메일로 회원 확인)
 export async function findIdByEmail(email) {
-  // 테스트용 이메일인 경우 모의 응답 반환
-  if (isTestEmail(email)) {
-    await mockDelay(800)
-    return { exists: true, email }
-  }
-
   try {
     const response = await fetch(`${API_BASE}/members/?email=${encodeURIComponent(email)}`, {
       method: 'GET',
@@ -134,27 +114,12 @@ export async function findIdByEmail(email) {
     })
     return handleResponse(response)
   } catch (error) {
-    // 네트워크 에러인 경우 테스트용 이메일이면 모의 응답 반환
-    if (error.isNetworkError && isTestEmail(email)) {
-      return { exists: true, email }
-    }
     throw wrapNetworkError(error)
   }
 }
 
 // 비밀번호 재설정 이메일 발송
 export async function sendPasswordResetEmail(email) {
-  // 테스트용 이메일인 경우 모의 응답 반환
-  if (isTestEmail(email)) {
-    await mockDelay(1000)
-    return { 
-      success: true, 
-      message: '인증 코드가 이메일로 전송되었습니다. (테스트 모드)',
-      // 테스트용: 인증 코드를 콘솔에 출력
-      testCode: '123456'
-    }
-  }
-
   try {
     const response = await fetch(`${API_BASE}/members/email`, {
       method: 'POST',
@@ -163,36 +128,12 @@ export async function sendPasswordResetEmail(email) {
     })
     return handleResponse(response)
   } catch (error) {
-    // 네트워크 에러인 경우 테스트용 이메일이면 모의 응답 반환
-    if (error.isNetworkError && isTestEmail(email)) {
-      const testCode = '123456'
-      console.log(`[테스트 모드] 인증 코드: ${testCode}`)
-      return { 
-        success: true, 
-        message: '인증 코드가 이메일로 전송되었습니다. (테스트 모드)',
-        testCode
-      }
-    }
     throw wrapNetworkError(error)
   }
 }
 
 // 비밀번호 재설정 (인증 코드 + 새 비밀번호)
 export async function resetPassword(email, code, newPassword) {
-  // 테스트용 이메일인 경우 모의 응답 반환
-  if (isTestEmail(email)) {
-    await mockDelay(1000)
-    // 테스트용 인증 코드는 '123456' 또는 '000000'
-    if (code === '123456' || code === '000000') {
-      return { 
-        success: true, 
-        message: '비밀번호가 성공적으로 재설정되었습니다. (테스트 모드)'
-      }
-    } else {
-      throw new Error('인증 코드가 올바르지 않습니다. (테스트 모드: 123456 또는 000000 사용)')
-    }
-  }
-
   try {
     const response = await fetch(`${API_BASE}/members/password-reset`, {
       method: 'POST',
@@ -201,17 +142,6 @@ export async function resetPassword(email, code, newPassword) {
     })
     return handleResponse(response)
   } catch (error) {
-    // 네트워크 에러인 경우 테스트용 이메일이면 모의 응답 반환
-    if (error.isNetworkError && isTestEmail(email)) {
-      if (code === '123456' || code === '000000') {
-        return { 
-          success: true, 
-          message: '비밀번호가 성공적으로 재설정되었습니다. (테스트 모드)'
-        }
-      } else {
-        throw new Error('인증 코드가 올바르지 않습니다. (테스트 모드: 123456 또는 000000 사용)')
-      }
-    }
     throw wrapNetworkError(error)
   }
 }

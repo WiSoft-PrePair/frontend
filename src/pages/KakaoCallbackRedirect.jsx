@@ -5,7 +5,9 @@ import { kakaoCallback } from '../utils/memberApi'
 import {
   KAKAO_OAUTH_INTENT_KEY,
   KAKAO_PENDING_SIGNUP_KEY,
+  KAKAO_PROCESSED_OAUTH_CODE_KEY,
 } from '../constants/kakaoAuthSession'
+import { getKakaoRedirectUri } from '../utils/kakaoRedirectUri'
 
 /**
  * 카카오 OAuth redirect_uri 로 들어오는 콜백 전용 라우트입니다.
@@ -32,17 +34,19 @@ export default function KakaoCallbackRedirect() {
       return
     }
 
-    if (!code || !code.trim()) {
+    const normalizedCode = code?.trim()
+    if (!normalizedCode) {
       navigate('/auth?mode=login', { replace: true })
       return
     }
 
     const intent = sessionStorage.getItem(KAKAO_OAUTH_INTENT_KEY) || 'login'
+    const processedCode = sessionStorage.getItem(KAKAO_PROCESSED_OAUTH_CODE_KEY)
+    if (processedCode === normalizedCode) return
+    sessionStorage.setItem(KAKAO_PROCESSED_OAUTH_CODE_KEY, normalizedCode)
 
-    let cancelled = false
-    kakaoCallback({ code: code.trim() })
+    kakaoCallback({ code: normalizedCode, redirectUri: getKakaoRedirectUri() })
       .then((response) => {
-        if (cancelled) return
         const data = response?.data ?? response
 
         if (data?.isNewMember) {
@@ -78,7 +82,7 @@ export default function KakaoCallbackRedirect() {
         navigate('/auth?mode=login&kakaoError=no_token', { replace: true })
       })
       .catch((callbackError) => {
-        if (cancelled) return
+        sessionStorage.removeItem(KAKAO_PROCESSED_OAUTH_CODE_KEY)
         sessionStorage.removeItem(KAKAO_OAUTH_INTENT_KEY)
         const params = new URLSearchParams()
         params.set('mode', 'login')
@@ -89,9 +93,6 @@ export default function KakaoCallbackRedirect() {
         navigate(`/auth?${params.toString()}`, { replace: true })
       })
 
-    return () => {
-      cancelled = true
-    }
   }, [navigate, searchParams, setUserFromAuthResponse])
 
   return null
