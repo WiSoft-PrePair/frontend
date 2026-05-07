@@ -156,12 +156,12 @@ function HexagonChart({ scores, size = 280, isMobile = false }) {
 function calculateCategoryScores(scoreHistory) {
   if (!scoreHistory || scoreHistory.length === 0) {
     return {
-      proactivity: 72,
-      values: 68,
-      collaboration: 75,
-      workEthic: 70,
-      creativity: 65,
-      logicalThinking: 78,
+      proactivity: 0,
+      values: 0,
+      collaboration: 0,
+      workEthic: 0,
+      creativity: 0,
+      logicalThinking: 0,
     }
   }
 
@@ -1726,7 +1726,7 @@ export default function CoachPage() {
                     className="coach__modal-score-circle"
                     style={{ '--score-color': getScoreColor(selectedHistory.score || 0) }}
                   >
-                    <span className="coach__modal-score-value">{selectedHistory.score || 0}</span>
+                    <span className="coach__modal-score-value">{selectedHistory.score ?? '-'}</span>
                     <span className="coach__modal-score-label">점</span>
                   </div>
                   <div className="coach__modal-score-info">
@@ -1735,7 +1735,11 @@ export default function CoachPage() {
                 </div>
                 <div className="coach__modal-result-points">
                   <span className="coach__modal-result-points-label">획득</span>
-                  <span className="coach__modal-result-points-value">+{selectedHistory.earnedPoints || 10}P</span>
+                  <span className="coach__modal-result-points-value">
+                    {typeof selectedHistory.earnedPoints === 'number'
+                      ? `+${selectedHistory.earnedPoints}P`
+                      : '-'}
+                  </span>
                 </div>
               </div>
 

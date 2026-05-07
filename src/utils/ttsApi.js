@@ -1,4 +1,5 @@
-const API_BASE = '/api'
+const PRIMARY_TTS_ENDPOINT = '/tts'
+const LEGACY_TTS_ENDPOINT = '/api/tts'
 
 /**
  * 공용 TTS API 클라이언트
@@ -90,7 +91,13 @@ export async function textToSpeech(text, options = {}, signal = null) {
   }
 
   try {
-    const endpoints = [`${API_BASE}/tts`, `${API_BASE}/interviews/tts`]
+    const endpoints = [PRIMARY_TTS_ENDPOINT, LEGACY_TTS_ENDPOINT]
+    const isLocalhost =
+      typeof window !== 'undefined' &&
+      ['localhost', '127.0.0.1'].includes(window.location.hostname)
+    if (isLocalhost) {
+      endpoints.push('/api/interviews/tts')
+    }
     let response = null
     let lastResponse = null
 

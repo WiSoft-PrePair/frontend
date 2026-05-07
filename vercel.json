@@ -1,7 +1,7 @@
 {
   "rewrites": [
     {
-      "source": "/api/tts",
+      "source": "/tts",
       "destination": "/api/tts"
     },
     {
