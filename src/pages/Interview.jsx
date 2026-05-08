@@ -339,7 +339,7 @@ function normalizeFeedbackResponse(response, question, answer) {
     category: question?.category,
     answer,
     historyId: payload?.historyId ?? payload?.id ?? `h-${Date.now()}`,
-    earnedPoints: payload?.earnedPoints ?? payload?.point ?? Math.max(40, Math.floor(score * 0.6)),
+    earnedPoints: payload?.earnedPoints ?? payload?.point ?? score,
   }
 }
 

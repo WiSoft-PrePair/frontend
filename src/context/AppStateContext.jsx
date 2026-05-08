@@ -19,6 +19,45 @@ const STORAGE_COMPANY_HISTORY_KEY = 'prepair_company_history'
 const STORAGE_ACTIVITY_KEY = 'prepair_activity'
 const STORAGE_PURCHASES_KEY = 'prepair_purchases'
 const STORAGE_PRO_USAGE_KEY = 'prepair_pro_usage'
+// 사용자별 포인트/스트릭 영속 저장 (로그아웃 후 재로그인해도 유지)
+const STORAGE_USER_PROGRESS_KEY = 'prepair_user_progress'
+
+/** localStorage에 저장된 사용자별 진행도(포인트/스트릭) 조회 */
+function getStoredProgress(userId) {
+  if (!userId) return null
+  try {
+    const all = JSON.parse(localStorage.getItem(STORAGE_USER_PROGRESS_KEY) || '{}')
+    return all[userId] || null
+  } catch {
+    return null
+  }
+}
+
+/** localStorage에 사용자별 진행도(포인트/스트릭) 저장 */
+function saveStoredProgress(userId, progress) {
+  if (!userId) return
+  try {
+    const all = JSON.parse(localStorage.getItem(STORAGE_USER_PROGRESS_KEY) || '{}')
+    all[userId] = { ...(all[userId] || {}), ...progress }
+    localStorage.setItem(STORAGE_USER_PROGRESS_KEY, JSON.stringify(all))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 회원 탈퇴 등에서 사용자별 진행도 제거 */
+function clearStoredProgress(userId) {
+  if (!userId) return
+  try {
+    const all = JSON.parse(localStorage.getItem(STORAGE_USER_PROGRESS_KEY) || '{}')
+    if (userId in all) {
+      delete all[userId]
+      localStorage.setItem(STORAGE_USER_PROGRESS_KEY, JSON.stringify(all))
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 /** 활동 히트맵 빈 그리드 (53주 × 7일) */
 function emptyActivityHeatmap() {
@@ -126,6 +165,16 @@ export function AppProvider({children}) {
     }
   }, [user])
 
+  // 포인트/스트릭은 사용자별로 localStorage에 영속 저장 → 로그아웃/재로그인해도 유지
+  useEffect(() => {
+    if (user?.id) {
+      saveStoredProgress(user.id, {
+        points: user.points || 0,
+        streak: user.streak || 0,
+      })
+    }
+  }, [user?.id, user?.points, user?.streak])
+
   // API 응답 user를 앱 user 형태로 정규화
   // - 로그인/회원가입: data.member_info 또는 data.user
   // - member_info 필드: point, isPro, memberId 등
@@ -180,17 +229,25 @@ export function AppProvider({children}) {
       apiUser.plan ??
       (apiUser.isPro === true ? 'pro' : apiUser.isPro === false ? 'free' : 'free')
 
+    const id =
+      apiUser.id ??
+      apiUser.userId ??
+      apiUser.memberId ??
+      `user-${apiUser.email?.replace('@', '-')}`
+
+    // 백엔드가 아직 포인트/스트릭을 누적 추적하지 않으므로,
+    // 로컬에 저장된 진행도가 있으면 그 값을 사용해 로그아웃 후에도 유지한다.
+    const apiPoints = apiUser.points ?? apiUser.point ?? 0
+    const apiStreak = apiUser.streak ?? 0
+    const savedProgress = getStoredProgress(id)
+
     return {
-      id:
-        apiUser.id ??
-        apiUser.userId ??
-        apiUser.memberId ??
-        `user-${apiUser.email?.replace('@', '-')}`,
+      id,
       nickname: apiUser.nickname ?? apiUser.name ?? '',
       name: apiUser.nickname ?? apiUser.name ?? '',
       email: apiUser.email ?? '',
-      points: apiUser.points ?? apiUser.point ?? 0,
-      streak: apiUser.streak ?? 0,
+      points: savedProgress?.points ?? apiPoints,
+      streak: savedProgress?.streak ?? apiStreak,
       jobRole: apiUser.job ?? apiUser.jobRole ?? apiUser.job_role ?? '',
       cadence,
       notificationKakao,
@@ -310,6 +367,7 @@ export function AppProvider({children}) {
   const deleteAccount = useCallback(async () => {
     setIsLoggingOut(true)
     const accessToken = authStorage.getItem(STORAGE_ACCESS_TOKEN_KEY)
+    const currentUserId = user?.id
 
     try {
       if (accessToken) {
@@ -329,13 +387,14 @@ export function AppProvider({children}) {
       localStorage.removeItem(STORAGE_COMPANY_HISTORY_KEY)
       localStorage.removeItem(STORAGE_ACTIVITY_KEY)
       localStorage.removeItem(STORAGE_PURCHASES_KEY)
+      clearStoredProgress(currentUserId)
     } catch (error) {
       console.error('[AppStateContext] deleteAccount api error:', error)
       throw error
     } finally {
       setIsLoggingOut(false)
     }
-  }, [])
+  }, [user?.id])
 
   // 프로필 업데이트
   const updateProfile = useCallback((updates) => {
@@ -362,7 +421,7 @@ export function AppProvider({children}) {
       (entry) => new Date(entry.date).toDateString() === new Date().toDateString(),
     )
 
-    const earnedPoints = result.earnedPoints ?? Math.max(40, Math.floor(result.score * 0.6))
+    const earnedPoints = result.earnedPoints ?? result.score ?? 0
 
     if (isFirstToday && earnedPoints > 0) {
       setUser(prev => prev ? {
