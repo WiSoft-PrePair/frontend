@@ -1,6 +1,4 @@
-const PRIMARY_TTS_ENDPOINT = '/tts'
-const LEGACY_TTS_ENDPOINT = '/api/tts'
-const BACKEND_TTS_ENDPOINT = '/api/interviews/tts'
+const TTS_ENDPOINT = '/api/tts'
 
 /**
  * 공용 TTS HTTP 클라이언트
@@ -8,7 +6,8 @@ const BACKEND_TTS_ENDPOINT = '/api/interviews/tts'
  * 요청 본문은 OpenAI Speech API와 맞춘 형태(`text`, `voice`, `language_type`)이며,
  * **질문 문장은 화상 면접 API에서 받은 값을 가공 없이 넣으면 됩니다.** (길이·공백 트림만 수행)
  *
- * API 키는 클라이언트에 두지 않습니다. 전용 TTS 서버·동일 출처 프록시(`/tts`, `/api/tts` 등)가 OpenAI를 호출합니다.
+ * 단일 출처 `POST /api/tts` 만 호출합니다. (PM2 `tts` 프로세스 → OpenAI Speech API)
+ * API 키는 서버(.env)에만 둡니다.
  */
 
 // 지원 음성 프리셋 (OpenAI TTS 기반, 한국어 사용에 적합한 톤 설명)
@@ -127,7 +126,7 @@ function extractHttpErrorMessage(payload, fallback) {
 /**
  * 텍스트를 음성으로 변환
  * @param {string} text - 변환할 텍스트 (최대 600자)
- * @param {Object} options - TTS 옵션 (`accessToken`: 동일 출처 백엔드 TTS용 JWT 등)
+ * @param {Object} options - TTS 옵션 (`speaker`, `language_type` 등)
  * @param {AbortSignal} signal - 취소용 AbortSignal (optional)
  * @returns {Promise<Blob>} 오디오 Blob (audio/wav)
  */
@@ -155,79 +154,20 @@ export async function textToSpeech(text, options = {}, signal = null) {
     language_type: options.language_type ?? DEFAULT_OPTIONS.language_type,
   }
 
-  const accessToken =
-    typeof options.accessToken === 'string' && options.accessToken.trim()
-      ? options.accessToken.trim()
-      : null
-
   try {
-    // PM2 TTS·nginx 프록시(/tts, /api/tts) 먼저. /api/interviews/tts는 선택(백엔드에 있을 때만).
-    const endpoints = [
-      PRIMARY_TTS_ENDPOINT,
-      LEGACY_TTS_ENDPOINT,
-      BACKEND_TTS_ENDPOINT,
-    ]
-    let response = null
-    let lastResponse = null
-
-    for (const endpoint of endpoints) {
-      const headers = {
-        'Content-Type': 'application/json',
-      }
-      if (accessToken && endpoint === BACKEND_TTS_ENDPOINT) {
-        headers.Authorization = `Bearer ${accessToken}`
-      }
-      // 백엔드 TTS 없이 PM2만 쓸 때는 불필요한 401 방지
-      if (!accessToken && endpoint === BACKEND_TTS_ENDPOINT) {
-        continue
-      }
-
-      const candidate = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(params),
-        signal,
-      })
-
-      if (candidate.ok) {
-        response = candidate
-        break
-      }
-
-      lastResponse = candidate
-
-      // 404: 다음 엔드포인트(로컬 /tts, Vercel /api/tts 등) 시도
-      // 5xx·429: 백엔드/한도 문제일 수 있으므로 동일 출처 TTS로 폴백
-      const tryNext =
-        candidate.status === 404 ||
-        candidate.status === 429 ||
-        (candidate.status >= 500 && candidate.status <= 599)
-
-      if (tryNext) {
-        console.warn(
-          `[ttsApi] ${endpoint} → HTTP ${candidate.status}, 다음 TTS 경로를 시도합니다.`
-        )
-        // 본문은 clone으로만 읽는다. 원본 Response는 마지막 실패 시 에러 메시지 파싱에 쓴다.
-        await candidate.clone().text().catch(() => '')
-        continue
-      }
-
-      response = candidate
-      break
-    }
-
-    response = response || lastResponse
+    const response = await fetch(TTS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal,
+    })
 
     if (!response.ok) {
-      if (response.status === 401) {
-        throw new Error('TTS 인증에 실패했습니다. 다시 로그인 후 시도해주세요.')
-      }
-
       const rawText = await response.text()
       let msg = 'TTS 변환에 실패했습니다.'
 
       console.error(
-        `[ttsApi] HTTP ${response.status}`,
+        `[ttsApi] ${TTS_ENDPOINT} → HTTP ${response.status}`,
         rawText ? rawText.substring(0, 1200) : '(empty body)'
       )
 
@@ -245,7 +185,7 @@ export async function textToSpeech(text, options = {}, signal = null) {
 
       if (response.status === 404) {
         msg =
-          'POST /tts·/api/tts 가 404입니다. nginx에서 PM2 TTS 포트(예: ecosystem의 TTS_PORT 7400)로 proxy_pass 하고, 범용 location /api/ 보다 위에 두세요.'
+          'POST /api/tts 가 404입니다. nginx에서 이 경로를 PM2 TTS 포트(예: 7400)로 proxy_pass 하고, 범용 location /api/ 보다 위에 두세요.'
       }
 
       throw new Error(typeof msg === 'string' ? msg : 'TTS 변환에 실패했습니다.')
