@@ -429,7 +429,11 @@ export default function MockInterview() {
     setPreloadError(null)
     const audios = {}
 
-    const options = { speaker: selectedSpeaker }
+    const accessToken = getAccessToken?.()
+    const options = {
+      speaker: selectedSpeaker,
+      ...(accessToken ? { accessToken } : {}),
+    }
 
     try {
       for (let i = 0; i < questions.length; i++) {
@@ -476,7 +480,7 @@ export default function MockInterview() {
       }
       throw error
     }
-  }, [selectedSpeaker])
+  }, [selectedSpeaker, getAccessToken])
 
   // 프리로딩 취소
   const cancelPreload = useCallback(() => {
@@ -546,7 +550,11 @@ export default function MockInterview() {
           await playAudio(audioUrl)
         } else {
           // 프리로딩 실패 시 온디맨드 TTS 폴백
-          const blob = await textToSpeech(questionText, { speaker: selectedSpeaker })
+          const accessToken = getAccessToken?.()
+          const blob = await textToSpeech(questionText, {
+            speaker: selectedSpeaker,
+            ...(accessToken ? { accessToken } : {}),
+          })
           await playAudio(blob)
         }
       } catch (error) {
@@ -559,7 +567,7 @@ export default function MockInterview() {
         }, 300)
       }
     },
-    [startCountdown, selectedSpeaker, disableTts]
+    [startCountdown, selectedSpeaker, disableTts, getAccessToken]
   )
 
   // 녹화 시간 타이머

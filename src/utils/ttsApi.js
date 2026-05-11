@@ -5,9 +5,8 @@ const BACKEND_TTS_ENDPOINT = '/api/interviews/tts'
 /**
  * 공용 TTS API 클라이언트
  *
- * 클라이언트는 OpenAI에 직접 호출하지 않습니다(CORS·키 노출 방지).
- * 동일 출처의 `/tts` → `/api/tts`(Vercel serverless 또는 Vite 개발 미들웨어)가
- * OpenAI Speech API를 호출해 audio/wav를 반환합니다.
+ * - `accessToken`이 있으면 백엔드 `POST /api/interviews/tts`(JWT 필요)를 우선 시도합니다.
+ * - 로컬·Vercel 등에서 동일 출처 `/tts`, `/api/tts`(서버리스/미들웨어)가 있으면 그쪽으로 폴백합니다.
  */
 
 // 지원 음성 프리셋 (OpenAI TTS 기반, 한국어 사용에 적합한 톤 설명)
@@ -64,7 +63,7 @@ const VALID_OPENAI_VOICES = new Set([
 /**
  * 텍스트를 음성으로 변환
  * @param {string} text - 변환할 텍스트 (최대 600자)
- * @param {Object} options - TTS 옵션
+ * @param {Object} options - TTS 옵션 (`accessToken`: 백엔드 TTS용 Bearer JWT)
  * @param {AbortSignal} signal - 취소용 AbortSignal (optional)
  * @returns {Promise<Blob>} 오디오 Blob (audio/wav)
  */
@@ -92,18 +91,30 @@ export async function textToSpeech(text, options = {}, signal = null) {
     language_type: options.language_type ?? DEFAULT_OPTIONS.language_type,
   }
 
+  const accessToken =
+    typeof options.accessToken === 'string' && options.accessToken.trim()
+      ? options.accessToken.trim()
+      : null
+
   try {
-    // 프론트 배포 환경마다 라우팅이 다를 수 있어 순차 폴백한다.
-    const endpoints = [PRIMARY_TTS_ENDPOINT, LEGACY_TTS_ENDPOINT, BACKEND_TTS_ENDPOINT]
+    // 토큰이 있으면 백엔드 TTS를 먼저 시도(단일 도메인 배포에서 서버리스 /tts 가 없을 때)
+    const endpoints = accessToken
+      ? [BACKEND_TTS_ENDPOINT, PRIMARY_TTS_ENDPOINT, LEGACY_TTS_ENDPOINT]
+      : [PRIMARY_TTS_ENDPOINT, LEGACY_TTS_ENDPOINT, BACKEND_TTS_ENDPOINT]
     let response = null
     let lastResponse = null
 
     for (const endpoint of endpoints) {
+      const headers = {
+        'Content-Type': 'application/json',
+      }
+      if (accessToken && endpoint === BACKEND_TTS_ENDPOINT) {
+        headers.Authorization = `Bearer ${accessToken}`
+      }
+
       const candidate = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(params),
         signal,
       })
@@ -123,6 +134,10 @@ export async function textToSpeech(text, options = {}, signal = null) {
     response = response || lastResponse
 
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('TTS 인증에 실패했습니다. 다시 로그인 후 시도해주세요.')
+      }
+
       const rawText = await response.text()
       let msg = 'TTS 변환에 실패했습니다.'
 
@@ -132,7 +147,7 @@ export async function textToSpeech(text, options = {}, signal = null) {
         if (errorData.details) {
           console.error('[ttsApi] 서버 상세:', errorData.details)
         }
-      } catch (_) {
+      } catch {
         console.error('[ttsApi] 500 응답 원문:', rawText.substring(0, 500))
         if (rawText.length > 0) msg = rawText.substring(0, 200)
       }
