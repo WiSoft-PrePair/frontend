@@ -8,7 +8,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "prod": "vite preview --host 0.0.0.0 --port 4173",
-    "tts-proxy": "node scripts/tts-proxy.js"
+    "tts-proxy": "node scripts/tts-proxy.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:reload": "pm2 reload ecosystem.config.cjs --update-env"
   },
   "dependencies": {
     "@ssgoi/react": "^4.2.1",

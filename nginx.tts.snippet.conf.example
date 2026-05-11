@@ -1,0 +1,20 @@
+# 사이트 도메인 server { ... } 안에 포함하세요.
+# PM2 tts 가 listen 하는 포트(기본 3001)와 맞춥니다.
+
+location /tts {
+  proxy_pass http://127.0.0.1:3001;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location /api/tts {
+  proxy_pass http://127.0.0.1:3001;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
