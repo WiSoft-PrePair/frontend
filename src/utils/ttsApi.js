@@ -5,8 +5,9 @@ const BACKEND_TTS_ENDPOINT = '/api/interviews/tts'
 /**
  * 공용 TTS API 클라이언트
  *
- * 백엔드의 `/api/tts` 엔드포인트(OpenAI TTS 등)를 호출해
- * 텍스트를 음성으로 변환합니다.
+ * 클라이언트는 OpenAI에 직접 호출하지 않습니다(CORS·키 노출 방지).
+ * 동일 출처의 `/tts` → `/api/tts`(Vercel serverless 또는 Vite 개발 미들웨어)가
+ * OpenAI Speech API를 호출해 audio/wav를 반환합니다.
  */
 
 // 지원 음성 프리셋 (OpenAI TTS 기반, 한국어 사용에 적합한 톤 설명)

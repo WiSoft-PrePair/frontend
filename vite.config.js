@@ -1,23 +1,27 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { openaiTtsDevPlugin } from './vite-plugin-openai-tts-dev.js'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    {
+      ...openaiTtsDevPlugin(),
+      enforce: 'pre',
+    },
+    react(),
+  ],
   server: {
     port: 4173,
     proxy: {
-      '/tts': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
-      '/api/tts': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
       '/api': {
         target: 'https://prepair.wisoft.dev',
         changeOrigin: true,
         secure: false,
+        bypass(req) {
+          if (req.url?.startsWith('/api/tts')) {
+            return false
+          }
+        },
       },
     },
   },
