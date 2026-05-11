@@ -1,9 +1,10 @@
 /**
- * 개발용 TTS 프록시 서버 (OpenAI TTS)
+ * TTS 전용 서버 (OpenAI Speech API 프록시)
  *
- * 실행: pnpm tts-proxy (또는 npm run tts-proxy)
+ * 로컬: `pnpm tts-proxy`
+ * 운영: PM2로 함께 띄움 (`ecosystem.config.cjs`의 `tts` 앱)
  *
- * .env 파일에 OPENAI_API_KEY를 설정하세요.
+ * `.env`에 OPENAI_API_KEY 필요. 포트는 TTS_PORT 또는 PORT (기본 3001).
  */
 
 import http from 'http'
@@ -17,7 +18,7 @@ const __dirname = dirname(__filename)
 
 config({ path: join(__dirname, '..', '.env') })
 
-const PORT = 3001
+const PORT = Number(process.env.TTS_PORT || process.env.PORT || 3001) || 3001
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY
 const OPENAI_TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
 
@@ -44,7 +45,10 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  if (req.method !== 'POST' || req.url !== '/api/tts') {
+  const pathname = (req.url || '').split('?')[0]
+  const isTtsPath = pathname === '/api/tts' || pathname === '/tts'
+
+  if (req.method !== 'POST' || !isTtsPath) {
     res.writeHead(404, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Not Found' }))
     return
@@ -152,12 +156,9 @@ const server = http.createServer((req, res) => {
   })
 })
 
-server.listen(PORT, () => {
-      console.log('')
-      console.log('TTS 프록시 서버가 시작되었습니다 (OpenAI TTS)')
-      console.log(`   http://localhost:${PORT}/api/tts`)
-      console.log('')
-      console.log('Vite 개발 서버와 함께 사용하세요:')
-      console.log('   pnpm dev (다른 터미널에서)')
-      console.log('')
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('')
+  console.log(`TTS 서버 (OpenAI)  http://0.0.0.0:${PORT}`)
+  console.log(`   POST /tts   POST /api/tts`)
+  console.log('')
 })

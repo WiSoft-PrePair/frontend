@@ -104,6 +104,7 @@ export async function createCompanyInterviewQuestion(payload, accessToken) {
   return handleResponse(response)
 }
 
+/** 화상 면접 질문 생성. 응답의 질문 문자열은 `speechFromInterviewQuestion`(→ `textToSpeech`)로 음성화한다. */
 export async function createVideoInterviewQuestion(payload, accessToken) {
   const response = await fetchWithEndpointFallback(
     [

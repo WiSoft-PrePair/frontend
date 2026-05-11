@@ -3,10 +3,12 @@ const LEGACY_TTS_ENDPOINT = '/api/tts'
 const BACKEND_TTS_ENDPOINT = '/api/interviews/tts'
 
 /**
- * 공용 TTS API 클라이언트
+ * 공용 TTS HTTP 클라이언트
  *
- * - `accessToken`이 있으면 백엔드 `POST /api/interviews/tts`(JWT 필요)를 우선 시도합니다.
- * - 로컬·Vercel 등에서 동일 출처 `/tts`, `/api/tts`(서버리스/미들웨어)가 있으면 그쪽으로 폴백합니다.
+ * 요청 본문은 OpenAI Speech API와 맞춘 형태(`text`, `voice`, `language_type`)이며,
+ * **질문 문장은 화상 면접 API에서 받은 값을 가공 없이 넣으면 됩니다.** (길이·공백 트림만 수행)
+ *
+ * API 키는 클라이언트에 두지 않습니다. 전용 TTS 서버·동일 출처 프록시(`/tts`, `/api/tts` 등)가 OpenAI를 호출합니다.
  */
 
 // 지원 음성 프리셋 (OpenAI TTS 기반, 한국어 사용에 적합한 톤 설명)
@@ -47,6 +49,7 @@ const DEFAULT_OPTIONS = {
 }
 
 const MAX_TEXT_LENGTH = 600
+
 const VALID_OPENAI_VOICES = new Set([
   'alloy',
   'ash',
@@ -58,6 +61,7 @@ const VALID_OPENAI_VOICES = new Set([
   'nova',
   'sage',
   'shimmer',
+  'verse',
 ])
 
 const MAX_ERROR_MESSAGE_LEN = 480
@@ -123,7 +127,7 @@ function extractHttpErrorMessage(payload, fallback) {
 /**
  * 텍스트를 음성으로 변환
  * @param {string} text - 변환할 텍스트 (최대 600자)
- * @param {Object} options - TTS 옵션 (`accessToken`: 백엔드 TTS용 Bearer JWT)
+ * @param {Object} options - TTS 옵션 (`accessToken`: 동일 출처 백엔드 TTS용 JWT 등)
  * @param {AbortSignal} signal - 취소용 AbortSignal (optional)
  * @returns {Promise<Blob>} 오디오 Blob (audio/wav)
  */
@@ -197,7 +201,8 @@ export async function textToSpeech(text, options = {}, signal = null) {
         console.warn(
           `[ttsApi] ${endpoint} → HTTP ${candidate.status}, 다음 TTS 경로를 시도합니다.`
         )
-        await candidate.text().catch(() => '')
+        // 본문은 clone으로만 읽는다. 원본 Response는 마지막 실패 시 에러 메시지 파싱에 쓴다.
+        await candidate.clone().text().catch(() => '')
         continue
       }
 
@@ -230,6 +235,11 @@ export async function textToSpeech(text, options = {}, signal = null) {
         if (rawText.length > 0) {
           msg = clampErrorText(rawText.substring(0, 300), 300) || msg
         }
+      }
+
+      if (response.status === 404) {
+        msg =
+          '이 사이트에서 음성 변환(TTS) 주소를 찾을 수 없습니다. 백엔드 /api/interviews/tts 오류를 먼저 해결하거나, 배포에 OpenAI 등 음성 API(/api/tts) 라우트를 추가해주세요.'
       }
 
       throw new Error(typeof msg === 'string' ? msg : 'TTS 변환에 실패했습니다.')

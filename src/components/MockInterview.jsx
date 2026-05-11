@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion as Motion, AnimatePresence } from 'framer-motion'
 import { useAppState } from '../context/AppStateContext'
 import { useTTS } from '../hooks/useTTS'
-import { textToSpeech } from '../utils/ttsApi'
+import { speechFromInterviewQuestion } from '../utils/interviewTts'
 import {
   createVideoInterviewQuestion,
   streamVideoInterviewResult,
@@ -31,6 +31,7 @@ const ANALYSIS_STATUS_LABELS = [
   '질문별 피드백 초안을 생성하는 중…',
 ]
 
+/** 화상 면접 질문 API 응답 → TTS에 넘길 `text`만 추출 */
 function normalizeVideoQuestionList(response) {
   const payload = response?.data ?? response
   const list = Array.isArray(payload)
@@ -447,7 +448,11 @@ export default function MockInterview() {
           if (i > 0) {
             await new Promise((r) => setTimeout(r, 1000))
           }
-          const blob = await textToSpeech(questions[i].text, options, abortController.signal)
+          const blob = await speechFromInterviewQuestion(
+            questions[i].text,
+            options,
+            abortController.signal
+          )
           const url = URL.createObjectURL(blob)
           audios[questions[i].id] = url
           setPreloadProgress(Math.round(((i + 1) / questions.length) * 100))
@@ -551,7 +556,7 @@ export default function MockInterview() {
         } else {
           // 프리로딩 실패 시 온디맨드 TTS 폴백
           const accessToken = getAccessToken?.()
-          const blob = await textToSpeech(questionText, {
+          const blob = await speechFromInterviewQuestion(questionText, {
             speaker: selectedSpeaker,
             ...(accessToken ? { accessToken } : {}),
           })
