@@ -161,10 +161,12 @@ export async function textToSpeech(text, options = {}, signal = null) {
       : null
 
   try {
-    // 토큰이 있으면 백엔드 TTS를 먼저 시도(단일 도메인 배포에서 서버리스 /tts 가 없을 때)
-    const endpoints = accessToken
-      ? [BACKEND_TTS_ENDPOINT, PRIMARY_TTS_ENDPOINT, LEGACY_TTS_ENDPOINT]
-      : [PRIMARY_TTS_ENDPOINT, LEGACY_TTS_ENDPOINT, BACKEND_TTS_ENDPOINT]
+    // PM2 TTS·nginx 프록시(/tts, /api/tts) 먼저. /api/interviews/tts는 선택(백엔드에 있을 때만).
+    const endpoints = [
+      PRIMARY_TTS_ENDPOINT,
+      LEGACY_TTS_ENDPOINT,
+      BACKEND_TTS_ENDPOINT,
+    ]
     let response = null
     let lastResponse = null
 
@@ -174,6 +176,10 @@ export async function textToSpeech(text, options = {}, signal = null) {
       }
       if (accessToken && endpoint === BACKEND_TTS_ENDPOINT) {
         headers.Authorization = `Bearer ${accessToken}`
+      }
+      // 백엔드 TTS 없이 PM2만 쓸 때는 불필요한 401 방지
+      if (!accessToken && endpoint === BACKEND_TTS_ENDPOINT) {
+        continue
       }
 
       const candidate = await fetch(endpoint, {
@@ -239,7 +245,7 @@ export async function textToSpeech(text, options = {}, signal = null) {
 
       if (response.status === 404) {
         msg =
-          '이 사이트에서 음성 변환(TTS) 주소를 찾을 수 없습니다. 백엔드 /api/interviews/tts 오류를 먼저 해결하거나, 배포에 OpenAI 등 음성 API(/api/tts) 라우트를 추가해주세요.'
+          'POST /tts·/api/tts 가 404입니다. nginx에서 PM2 TTS 포트(예: ecosystem의 TTS_PORT 7400)로 proxy_pass 하고, 범용 location /api/ 보다 위에 두세요.'
       }
 
       throw new Error(typeof msg === 'string' ? msg : 'TTS 변환에 실패했습니다.')

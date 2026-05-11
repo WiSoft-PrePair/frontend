@@ -9,8 +9,9 @@
  * 확인: pm2 ls 에 fe 와 tts 둘 다 online 이어야 함.
  * TTS만 없으면: pm2 start ecosystem.config.cjs --only tts
  *
- * nginx: 브라우저가 같은 도메인으로 POST /tts, /api/tts 할 수 있게
- *   127.0.0.1:TTS_PORT(기본 3001) 로 proxy_pass 필요. (vite preview는 /tts 안 줌)
+ * 포트(팀 기준 예시): FE 7000 · API-Gateway 7100 · BE-Nest 7200 · BE-Java 7300 · TTS(PM2) 7400
+ *
+ * nginx: POST /tts, /api/tts → 127.0.0.1:TTS_PORT(아래 env, 기본 7400). 범용 /api/ 보다 위에 두기.
  *
  * .env 에 OPENAI_API_KEY 필수 (tts 프로세스가 읽음)
  */
@@ -34,7 +35,7 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 4173,
+        PORT: 7000,
       },
     },
     {
@@ -49,7 +50,7 @@ module.exports = {
       max_memory_restart: '256M',
       env: {
         NODE_ENV: 'production',
-        TTS_PORT: 3001,
+        TTS_PORT: 7400,
       },
     },
   ],
