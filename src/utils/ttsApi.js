@@ -60,6 +60,66 @@ const VALID_OPENAI_VOICES = new Set([
   'shimmer',
 ])
 
+const MAX_ERROR_MESSAGE_LEN = 480
+
+function clampErrorText(value, max = MAX_ERROR_MESSAGE_LEN) {
+  if (!value || typeof value !== 'string') return value
+  const t = value.trim()
+  if (!t.length) return ''
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+/** API 오류 JSON의 message/error 필드가 객체일 때도 문자열로 펼친다. */
+function fragmentToErrorMessage(fragment, depth = 0) {
+  if (fragment == null || depth > 6) return ''
+  if (typeof fragment === 'string') {
+    const t = fragment.trim()
+    return t.length ? t : ''
+  }
+  if (typeof fragment === 'number' || typeof fragment === 'boolean') {
+    return String(fragment)
+  }
+  if (Array.isArray(fragment)) {
+    const parts = fragment
+      .map((item) => fragmentToErrorMessage(item, depth + 1))
+      .filter(Boolean)
+    return parts.join('; ')
+  }
+  if (typeof fragment === 'object') {
+    const nested =
+      fragmentToErrorMessage(fragment.message, depth + 1) ||
+      fragmentToErrorMessage(fragment.error, depth + 1) ||
+      fragmentToErrorMessage(fragment.detail, depth + 1) ||
+      fragmentToErrorMessage(fragment.description, depth + 1)
+    if (nested) return nested
+    try {
+      return JSON.stringify(fragment)
+    } catch {
+      return ''
+    }
+  }
+  return String(fragment)
+}
+
+function extractHttpErrorMessage(payload, fallback) {
+  if (payload == null) return fallback
+  if (typeof payload === 'string') {
+    const t = clampErrorText(payload)
+    return t || fallback
+  }
+  if (typeof payload !== 'object') return fallback
+
+  const text =
+    fragmentToErrorMessage(payload.message) ||
+    fragmentToErrorMessage(payload.error) ||
+    fragmentToErrorMessage(payload.detail) ||
+    fragmentToErrorMessage(payload.title) ||
+    fragmentToErrorMessage(payload.errors)
+
+  const normalized = clampErrorText(text)
+  return normalized || fallback
+}
+
 /**
  * 텍스트를 음성으로 변환
  * @param {string} text - 변환할 텍스트 (최대 600자)
@@ -125,10 +185,24 @@ export async function textToSpeech(text, options = {}, signal = null) {
       }
 
       lastResponse = candidate
-      if (candidate.status !== 404) {
-        response = candidate
-        break
+
+      // 404: 다음 엔드포인트(로컬 /tts, Vercel /api/tts 등) 시도
+      // 5xx·429: 백엔드/한도 문제일 수 있으므로 동일 출처 TTS로 폴백
+      const tryNext =
+        candidate.status === 404 ||
+        candidate.status === 429 ||
+        (candidate.status >= 500 && candidate.status <= 599)
+
+      if (tryNext) {
+        console.warn(
+          `[ttsApi] ${endpoint} → HTTP ${candidate.status}, 다음 TTS 경로를 시도합니다.`
+        )
+        await candidate.text().catch(() => '')
+        continue
       }
+
+      response = candidate
+      break
     }
 
     response = response || lastResponse
@@ -141,18 +215,24 @@ export async function textToSpeech(text, options = {}, signal = null) {
       const rawText = await response.text()
       let msg = 'TTS 변환에 실패했습니다.'
 
+      console.error(
+        `[ttsApi] HTTP ${response.status}`,
+        rawText ? rawText.substring(0, 1200) : '(empty body)'
+      )
+
       try {
         const errorData = JSON.parse(rawText)
-        msg = errorData.error || errorData.message || msg
+        msg = extractHttpErrorMessage(errorData, msg)
         if (errorData.details) {
           console.error('[ttsApi] 서버 상세:', errorData.details)
         }
       } catch {
-        console.error('[ttsApi] 500 응답 원문:', rawText.substring(0, 500))
-        if (rawText.length > 0) msg = rawText.substring(0, 200)
+        if (rawText.length > 0) {
+          msg = clampErrorText(rawText.substring(0, 300), 300) || msg
+        }
       }
 
-      throw new Error(msg)
+      throw new Error(typeof msg === 'string' ? msg : 'TTS 변환에 실패했습니다.')
     }
 
     const contentType = response.headers.get('Content-Type') || ''
