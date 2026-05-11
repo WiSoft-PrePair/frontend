@@ -9,9 +9,10 @@
  * 확인: pm2 ls 에 fe 와 tts 둘 다 online 이어야 함.
  * TTS만 없으면: pm2 start ecosystem.config.cjs --only tts
  *
- * 포트(팀 기준 예시): FE 7000 · API-Gateway 7100 · BE-Nest 7200 · BE-Java 7300 · TTS(PM2) 7400
+ * 포트: 현재 인프라 기준 FE(vite preview) 4173, TTS(scripts/tts-proxy.js) 3001
+ * (참고용 팀 슬롯: API-Gateway 7100 · BE-Nest 7200 · BE-Java 7300)
  *
- * nginx: POST /tts, /api/tts → 127.0.0.1:TTS_PORT(아래 env, 기본 7400). 범용 /api/ 보다 위에 두기.
+ * nginx: POST /api/tts → 127.0.0.1:TTS_PORT(아래 env). 범용 /api/ 보다 위에 두기.
  *
  * .env 에 OPENAI_API_KEY 필수 (tts 프로세스가 읽음)
  */
@@ -50,7 +51,7 @@ module.exports = {
       max_memory_restart: '256M',
       env: {
         NODE_ENV: 'production',
-        TTS_PORT: 7400,
+        TTS_PORT: 3001,
       },
     },
   ],

@@ -24,7 +24,7 @@ module.exports = {
       max_memory_restart: '256M',
       env: {
         NODE_ENV: 'production',
-        TTS_PORT: 7400,
+        TTS_PORT: 3001,
       },
     },
   ],

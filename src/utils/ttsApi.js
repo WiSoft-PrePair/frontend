@@ -185,7 +185,7 @@ export async function textToSpeech(text, options = {}, signal = null) {
 
       if (response.status === 404) {
         msg =
-          'POST /api/tts 가 404입니다. nginx에서 이 경로를 PM2 TTS 포트(예: 7400)로 proxy_pass 하고, 범용 location /api/ 보다 위에 두세요.'
+          'POST /api/tts 가 404입니다. nginx에서 이 경로를 PM2 TTS 포트(현재 3001)로 proxy_pass 하고, 범용 location /api/ 보다 위에 두세요.'
       }
 
       throw new Error(typeof msg === 'string' ? msg : 'TTS 변환에 실패했습니다.')
