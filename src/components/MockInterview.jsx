@@ -286,6 +286,8 @@ export default function MockInterview() {
   const animationFrameRef = useRef(null)
   const audioElementRef = useRef(null) // 모바일 오디오 재생용
   const preloadAbortControllerRef = useRef(null) // 프리로딩 취소용
+  /** 언마운트 시에만 false — `phase` 전환 시 loading effect cleanup이 `cancelled`를 켜도 타이머는 계속 돌아야 함 */
+  const mockInterviewMountedRef = useRef(true)
   const answersSnapshotRef = useRef([])
   const mediaRecorderRef = useRef(null)
   const recordingPromiseRef = useRef(null)
@@ -302,6 +304,13 @@ export default function MockInterview() {
     setTtsEnabled(false)
     if (reason) {
       setPreloadError(reason)
+    }
+  }, [])
+
+  useEffect(() => {
+    mockInterviewMountedRef.current = true
+    return () => {
+      mockInterviewMountedRef.current = false
     }
   }, [])
 
@@ -387,7 +396,7 @@ export default function MockInterview() {
     startVideoRecording(currentQuestion.id)
   }, [phase, isRecording, currentQuestion?.id, startVideoRecording])
 
-  // 카메라 시작
+  // 카메라 시작 (실패 시 UI에서 phase 복구를 위해 `{ stream, error }`로 반환)
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -396,10 +405,11 @@ export default function MockInterview() {
       })
       streamRef.current = stream
       setCameraError(null)
-      return stream
+      return { stream, error: null }
     } catch (err) {
-      setCameraError(`카메라 접근 오류: ${err.message}`)
-      return null
+      const msg = `카메라 접근 오류: ${err.message}`
+      setCameraError(msg)
+      return { stream: null, error: msg }
     }
   }, [])
 
@@ -604,9 +614,11 @@ export default function MockInterview() {
     async (question) => {
       const questionId = question?.id
       const questionText = question?.text
+      // 문구는 TTS 성공 여부와 무관하게 먼저 노출 (빈 값이면 아래에서 조기 종료)
+      if (questionText) {
+        setIsQuestionVisible(true)
+      }
       if (!questionId || !questionText) return
-
-      setIsQuestionVisible(true)
 
       if (!ttsEnabledRef.current) {
         setIsSpeaking(false)
@@ -672,38 +684,57 @@ export default function MockInterview() {
     let cancelled = false
 
     const run = async () => {
-      const audios = await preloadQuestionAudios(questions)
-      if (cancelled || !audios) return
+      try {
+        const audios = await preloadQuestionAudios(questions)
+        if (cancelled || !audios) return
 
-      const stream = await startCamera()
-      if (cancelled || !stream) return
-
-      setPhase('interview')
-      setCurrentQuestionIndex(0)
-      setAnswers([])
-      answersSnapshotRef.current = []
-      pendingAnswerFileRef.current = null
-      recordingPromiseRef.current = null
-      mediaRecorderRef.current = null
-      setHasPendingRecording(false)
-      setIsSubmittingAnswer(false)
-
-      startAudioAnalysis(stream)
-
-      setTimeout(() => {
+        const { stream, error: cameraStartError } = await startCamera()
         if (cancelled) return
-        if (videoRef.current && stream) {
-          videoRef.current.srcObject = stream
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current.play().catch(() => {})
-          }
+        if (!stream) {
+          setPhase('ready')
+          setErrorMessage(
+            cameraStartError ||
+              '카메라·마이크를 사용할 수 없어 면접을 시작할 수 없습니다. 브라우저에서 권한을 허용한 뒤 다시 시도해주세요.'
+          )
+          return
         }
-      }, 500)
 
-      setTimeout(() => {
+        setPhase('interview')
+        setCurrentQuestionIndex(0)
+        setAnswers([])
+        answersSnapshotRef.current = []
+        pendingAnswerFileRef.current = null
+        recordingPromiseRef.current = null
+        mediaRecorderRef.current = null
+        setHasPendingRecording(false)
+        setIsSubmittingAnswer(false)
+        // 첫 질문 문구는 즉시 표시 (loading effect cleanup이 `cancelled`를 켠 뒤에도 타이머가 speak를 호출해야 함)
+        if (questions[0]?.text) {
+          setIsQuestionVisible(true)
+        }
+
+        startAudioAnalysis(stream)
+
+        setTimeout(() => {
+          if (!mockInterviewMountedRef.current) return
+          if (videoRef.current && stream) {
+            videoRef.current.srcObject = stream
+            videoRef.current.onloadedmetadata = () => {
+              videoRef.current.play().catch(() => {})
+            }
+          }
+        }, 500)
+
+        setTimeout(() => {
+          if (!mockInterviewMountedRef.current) return
+          speakQuestion(questions[0])
+        }, 1500)
+      } catch (e) {
         if (cancelled) return
-        speakQuestion(questions[0])
-      }, 1500)
+        console.error('[MockInterview] 면접 준비 단계 오류:', e)
+        setPhase('ready')
+        setErrorMessage(e?.message || '면접 준비 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.')
+      }
     }
 
     void run()
