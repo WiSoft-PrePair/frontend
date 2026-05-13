@@ -14,21 +14,38 @@ import '../styles/components/MockInterview.css'
 const MIN_QUESTIONS = 1
 const MAX_QUESTIONS = 3
 
+/**
+ * TTS 등 장시간 await 동안 진행 바가 멈춘 뒤 한 번에 도약하는 느낌을 줄이기 위해,
+ * capPct 이하로만 서서히 올린다. 완료 시에는 별도로 milestoneAfter를 설정한다.
+ */
+function startPreloadProgressRamp({ setProgress, signal, fromPct, capPct, intervalMs = 200 }) {
+  let current = fromPct
+  let stopped = false
+  const tick = () => {
+    if (stopped || signal.aborted) return
+    const room = capPct - current
+    if (room <= 0.35) {
+      current = capPct
+      setProgress(Math.round(current))
+      return
+    }
+    const step = Math.max(0.35, room * 0.1)
+    current = Math.min(capPct, current + step)
+    setProgress(Math.round(current))
+  }
+  tick()
+  const id = setInterval(tick, intervalMs)
+  return () => {
+    stopped = true
+    clearInterval(id)
+  }
+}
+
 const behaviorMetrics = [
   { id: 'eyeContact', label: '시선 처리', icon: '👁️', description: '카메라를 향한 시선 유지' },
   { id: 'expression', label: '표정', icon: '😊', description: '자연스럽고 밝은 표정' },
   { id: 'posture', label: '자세', icon: '🧍', description: '바른 자세 유지' },
   { id: 'speech', label: '말하기', icon: '🎤', description: '명확한 발음과 적절한 속도' },
-]
-
-const ANALYSIS_DURATION_MS = 3200
-
-const ANALYSIS_STATUS_LABELS = [
-  '음성 데이터 패턴을 분석하는 중…',
-  '시선 처리·표정 신호를 정리하는 중…',
-  '단어 선택·논리 구조를 요약하는 중…',
-  '비언어적 태도와 말하기 리듬을 교차 검증하는 중…',
-  '질문별 피드백 초안을 생성하는 중…',
 ]
 
 /** 화상 면접 질문 API 응답 → TTS에 넘길 `text`만 추출 */
@@ -275,9 +292,9 @@ export default function MockInterview() {
   const pendingAnswerFileRef = useRef(null)
 
   const [interviewReport, setInterviewReport] = useState(null)
-  const [analysisUiProgress, setAnalysisUiProgress] = useState(0)
-  const [analysisStatusIndex, setAnalysisStatusIndex] = useState(0)
   const [displayedOverallScore, setDisplayedOverallScore] = useState(0)
+  /** 질문 생성 API 대기 중(로딩 단계 진입 전) */
+  const [isFetchingInterviewSetup, setIsFetchingInterviewSetup] = useState(false)
 
   const disableTts = useCallback((reason) => {
     if (!ttsEnabledRef.current) return
@@ -371,7 +388,7 @@ export default function MockInterview() {
   }, [phase, isRecording, currentQuestion?.id, startVideoRecording])
 
   // 카메라 시작
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -384,7 +401,7 @@ export default function MockInterview() {
       setCameraError(`카메라 접근 오류: ${err.message}`)
       return null
     }
-  }
+  }, [])
 
   // 비디오 요소에 스트림 연결 (백업용)
   useEffect(() => {
@@ -499,14 +516,33 @@ export default function MockInterview() {
           if (i > 0) {
             await new Promise((r) => setTimeout(r, 1000))
           }
-          const blob = await speechFromInterviewQuestion(
-            questions[i].text,
-            options,
-            abortController.signal
-          )
+          const n = questions.length
+          const milestoneBefore = (i / n) * 100
+          const milestoneAfter = ((i + 1) / n) * 100
+          const segment = milestoneAfter - milestoneBefore
+          const capPct = milestoneAfter - Math.max(0.75, segment * 0.07)
+
+          setPreloadProgress(Math.round(milestoneBefore))
+          const stopRamp = startPreloadProgressRamp({
+            setProgress: setPreloadProgress,
+            signal: abortController.signal,
+            fromPct: milestoneBefore,
+            capPct,
+            intervalMs: 200,
+          })
+          let blob
+          try {
+            blob = await speechFromInterviewQuestion(
+              questions[i].text,
+              options,
+              abortController.signal
+            )
+          } finally {
+            stopRamp()
+          }
           const url = URL.createObjectURL(blob)
           audios[questions[i].id] = url
-          setPreloadProgress(Math.round(((i + 1) / questions.length) * 100))
+          setPreloadProgress(Math.round(milestoneAfter))
         } catch (error) {
           if (error.name === 'AbortError') {
             throw error
@@ -626,6 +662,61 @@ export default function MockInterview() {
     [startCountdown, selectedSpeaker, disableTts, getAccessToken]
   )
 
+  // 프리로드는 로딩 UI가 실제로 마운트된 뒤에만 시작한다.
+  // (AnimatePresence mode="wait"면 ready 퇴장 중에는 loading이 없어, 동기로 preload를 돌리면 0→100만 보일 수 있음)
+  useEffect(() => {
+    if (phase !== 'loading') return undefined
+    const questions = selectedQuestions
+    if (!questions.length) return undefined
+
+    let cancelled = false
+
+    const run = async () => {
+      const audios = await preloadQuestionAudios(questions)
+      if (cancelled || !audios) return
+
+      const stream = await startCamera()
+      if (cancelled || !stream) return
+
+      setPhase('interview')
+      setCurrentQuestionIndex(0)
+      setAnswers([])
+      answersSnapshotRef.current = []
+      pendingAnswerFileRef.current = null
+      recordingPromiseRef.current = null
+      mediaRecorderRef.current = null
+      setHasPendingRecording(false)
+      setIsSubmittingAnswer(false)
+
+      startAudioAnalysis(stream)
+
+      setTimeout(() => {
+        if (cancelled) return
+        if (videoRef.current && stream) {
+          videoRef.current.srcObject = stream
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current.play().catch(() => {})
+          }
+        }
+      }, 500)
+
+      setTimeout(() => {
+        if (cancelled) return
+        speakQuestion(questions[0])
+      }, 1500)
+    }
+
+    void run()
+
+    return () => {
+      cancelled = true
+      if (preloadAbortControllerRef.current) {
+        preloadAbortControllerRef.current.abort()
+        preloadAbortControllerRef.current = null
+      }
+    }
+  }, [phase, selectedQuestions, preloadQuestionAudios, startCamera, startAudioAnalysis, speakQuestion])
+
   // 녹화 시간 타이머
   useEffect(() => {
     if (isRecording) {
@@ -647,6 +738,7 @@ export default function MockInterview() {
 
   // 면접 시작
   const handleStart = async () => {
+    if (isFetchingInterviewSetup) return
     setErrorMessage('')
     ttsEnabledRef.current = true
     setTtsEnabled(true)
@@ -655,6 +747,7 @@ export default function MockInterview() {
 
     // 질문 선택: VIDEO API만 사용
     let questions = []
+    setIsFetchingInterviewSetup(true)
     try {
       const accessToken = getAccessToken?.()
       const requestCount = Math.min(MAX_QUESTIONS, Math.max(MIN_QUESTIONS, questionCount))
@@ -666,55 +759,22 @@ export default function MockInterview() {
     } catch (error) {
       console.error('[MockInterview] createVideoInterviewQuestion error:', error)
       setErrorMessage(error?.message || '면접 질문 생성에 실패했습니다.')
+      setIsFetchingInterviewSetup(false)
       return
     }
     if (questions.length === 0) {
       setVideoSessionId(null)
       setErrorMessage('면접 질문 생성 결과가 비어있습니다. 잠시 후 다시 시도해주세요.')
+      setIsFetchingInterviewSetup(false)
       return
     }
 
     setSelectedQuestions(questions)
     setIsQuestionVisible(false)
+    setIsFetchingInterviewSetup(false)
 
-    // 질문 음성 프리로딩 시작
+    // 질문 음성 프리로딩·카메라·면접 진입은 `phase === 'loading'` effect에서 처리
     setPhase('loading')
-    const audios = await preloadQuestionAudios(questions)
-
-    // 프리로딩이 취소된 경우 중단
-    if (!audios) return
-
-    // 카메라 시작
-    const stream = await startCamera()
-    if (!stream) return // 카메라 오류 시 진행하지 않음
-
-    setPhase('interview')
-    setCurrentQuestionIndex(0)
-    setAnswers([])
-    answersSnapshotRef.current = []
-    pendingAnswerFileRef.current = null
-    recordingPromiseRef.current = null
-    mediaRecorderRef.current = null
-    setHasPendingRecording(false)
-    setIsSubmittingAnswer(false)
-
-    // 오디오 레벨 분석 시작
-    startAudioAnalysis(stream)
-
-    // 비디오 요소가 렌더링된 후 스트림 연결
-    setTimeout(() => {
-      if (videoRef.current && stream) {
-        videoRef.current.srcObject = stream
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current.play().catch(() => {})
-        }
-      }
-    }, 500)
-
-    // 첫 질문 읽기
-    setTimeout(() => {
-      speakQuestion(questions[0])
-    }, 1500)
   }
 
   // 답변 완료 (다음 질문으로)
@@ -829,31 +889,11 @@ export default function MockInterview() {
   useEffect(() => {
     if (phase !== 'analyzing') return undefined
 
-    setAnalysisUiProgress(0)
-    setAnalysisStatusIndex(0)
     setDisplayedOverallScore(0)
-
-    const start = performance.now()
-    const rafRef = { current: 0 }
-    const tick = (now) => {
-      const t = Math.min(1, (now - start) / ANALYSIS_DURATION_MS)
-      setAnalysisUiProgress(Math.round(t * 100))
-      if (t < 1) rafRef.current = requestAnimationFrame(tick)
-    }
-    rafRef.current = requestAnimationFrame(tick)
-
-    const statusTimer = setInterval(() => {
-      setAnalysisStatusIndex((i) => (i + 1) % 5)
-    }, 600)
-
-    const doneTimer = setTimeout(() => {
-      fetchFinalVideoResult()
-    }, ANALYSIS_DURATION_MS)
+    void fetchFinalVideoResult()
 
     return () => {
-      cancelAnimationFrame(rafRef.current)
-      clearInterval(statusTimer)
-      clearTimeout(doneTimer)
+      analysisAbortRef.current?.abort()
     }
   }, [phase, fetchFinalVideoResult])
 
@@ -881,6 +921,7 @@ export default function MockInterview() {
     preloadedAudiosRef.current = {}
 
     setPhase('ready')
+    setIsFetchingInterviewSetup(false)
     setPreloadError(null)
     setCurrentQuestionIndex(0)
     setAnswers([])
@@ -950,6 +991,7 @@ export default function MockInterview() {
         preloadedAudiosRef.current = {}
 
         setPhase('ready')
+        setIsFetchingInterviewSetup(false)
         setCurrentQuestionIndex(0)
         setAnswers([])
         setInterviewReport(null)
@@ -1033,7 +1075,7 @@ export default function MockInterview() {
                   <button
                     className="mock-interview__count-btn"
                     onClick={() => setQuestionCount((prev) => Math.max(MIN_QUESTIONS, prev - 1))}
-                    disabled={questionCount <= MIN_QUESTIONS}
+                    disabled={isFetchingInterviewSetup || questionCount <= MIN_QUESTIONS}
                   >
                     -
                   </button>
@@ -1043,6 +1085,7 @@ export default function MockInterview() {
                     value={questionCount}
                     min={MIN_QUESTIONS}
                     max={MAX_QUESTIONS}
+                    disabled={isFetchingInterviewSetup}
                     onChange={(e) => {
                       const value = parseInt(e.target.value, 10)
                       if (!isNaN(value)) {
@@ -1053,7 +1096,7 @@ export default function MockInterview() {
                   <button
                     className="mock-interview__count-btn"
                     onClick={() => setQuestionCount((prev) => Math.min(MAX_QUESTIONS, prev + 1))}
-                    disabled={questionCount >= MAX_QUESTIONS}
+                    disabled={isFetchingInterviewSetup || questionCount >= MAX_QUESTIONS}
                   >
                     +
                   </button>
@@ -1074,6 +1117,7 @@ export default function MockInterview() {
                   value={selectedSpeaker}
                   onChange={setSelectedSpeaker}
                   placeholder="음성을 선택하세요"
+                  disabled={isFetchingInterviewSetup}
                 />
               </div>
 
@@ -1085,8 +1129,21 @@ export default function MockInterview() {
                 </p>
               </div>
 
-              <button className="btn btn--primary btn--lg" onClick={handleStart}>
-                면접 시작하기
+              <button
+                type="button"
+                className={`btn btn--primary btn--lg mock-interview__start-btn${isFetchingInterviewSetup ? ' mock-interview__start-btn--busy' : ''}`}
+                onClick={handleStart}
+                disabled={isFetchingInterviewSetup}
+                aria-busy={isFetchingInterviewSetup}
+              >
+                {isFetchingInterviewSetup ? (
+                  <span className="mock-interview__start-btn-inner">
+                    <span className="mock-interview__start-spinner" aria-hidden />
+                    질문을 불러오는 중…
+                  </span>
+                ) : (
+                  '면접 시작하기'
+                )}
               </button>
             </div>
           </Motion.div>
@@ -1272,22 +1329,24 @@ export default function MockInterview() {
                 면접관 AI가 답변의 논리성과 태도를 종합적으로 검토하고 있습니다.
               </p>
 
-              <div className="mock-interview__analyzing-progress">
-                <div className="mock-interview__analyzing-progress-track">
-                  <div
-                    className="mock-interview__analyzing-progress-fill"
-                    style={{ width: `${analysisUiProgress}%` }}
-                  />
+              <div
+                className="mock-interview__analyzing-progress"
+                role="progressbar"
+                aria-valuetext="처리 중"
+              >
+                <div className="mock-interview__analyzing-progress-track mock-interview__analyzing-progress-track--indeterminate">
+                  <div className="mock-interview__analyzing-progress-fill mock-interview__analyzing-progress-fill--indeterminate" />
                 </div>
-                <span className="mock-interview__analyzing-progress-pct">{analysisUiProgress}%</span>
               </div>
 
               <p className="mock-interview__analyzing-status" role="status" aria-live="polite">
-                {ANALYSIS_STATUS_LABELS[analysisStatusIndex]}
+                면접 결과를 서버에서 가져오는 중입니다.</p>
+                <p className="mock-interview__analyzing-status" role="status" aria-live="polite">
+                완료되는 대로 화면이 바뀝니다.
               </p>
 
               <p className="mock-interview__analyzing-hint">
-                잠시만 기다려 주세요. 곧 결과 화면으로 이동합니다.
+                소요 시간은 네트워크와 분석량에 따라 달라질 수 있습니다.
               </p>
             </div>
           </Motion.div>

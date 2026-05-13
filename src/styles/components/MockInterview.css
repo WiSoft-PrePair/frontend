@@ -167,6 +167,27 @@
   color: var(--color-dark-400);
 }
 
+.mock-interview__start-btn--busy {
+  cursor: wait;
+}
+
+.mock-interview__start-btn-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+}
+
+.mock-interview__start-spinner {
+  flex-shrink: 0;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  animation: mockInterviewSpinner 0.88s linear infinite;
+}
+
 .mock-interview__voice-select {
   width: 100%;
   padding: 12px 16px;
@@ -555,6 +576,7 @@
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
+  width: 100%;
   max-width: 100%;
   margin: 0 auto var(--spacing-md);
 }
@@ -574,13 +596,27 @@
   transition: width 0.05s linear;
 }
 
-.mock-interview__analyzing-progress-pct {
-  font-size: var(--font-size-lg);
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-blue-600);
-  min-width: 3rem;
-  text-align: right;
+.mock-interview__analyzing-progress-track--indeterminate {
+  position: relative;
+}
+
+.mock-interview__analyzing-progress-fill--indeterminate {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 42%;
+  border-radius: var(--radius-full);
+  background: var(--gradient-primary);
+  animation: mockInterviewIndeterminateBar 1.35s ease-in-out infinite;
+}
+
+@keyframes mockInterviewIndeterminateBar {
+  0% {
+    left: -42%;
+  }
+  100% {
+    left: 100%;
+  }
 }
 
 .mock-interview__analyzing-status {
