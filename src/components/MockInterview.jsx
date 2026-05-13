@@ -64,26 +64,70 @@ function getPreferredVideoMimeType() {
   return mimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || ''
 }
 
+/**
+ * 화상 면접 최종 스트림에서 내려오는 피드백은 `sttFeedback` / `videoFeedback` 처럼
+ * JSON 문자열이거나 객체일 수 있다. (good / improvement / recommendation)
+ */
+function parseStructuredFeedback(raw) {
+  if (raw == null || raw === '') return null
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const g = raw.good ?? raw.Good
+    const i = raw.improvement ?? raw.Improvement
+    const r = raw.recommendation ?? raw.Recommendation
+    return {
+      good: typeof g === 'string' ? g : g != null ? String(g) : '',
+      improvement: typeof i === 'string' ? i : i != null ? String(i) : '',
+      recommendation: typeof r === 'string' ? r : r != null ? String(r) : '',
+    }
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    try {
+      return parseStructuredFeedback(JSON.parse(trimmed))
+    } catch {
+      return { good: '', improvement: trimmed, recommendation: '' }
+    }
+  }
+  return null
+}
+
+function toFeedbackTriple(parsed) {
+  if (!parsed) {
+    return { good: '없음', improvement: '없음', recommendation: '없음' }
+  }
+  return {
+    good: parsed.good?.trim() || '없음',
+    improvement: parsed.improvement?.trim() || '없음',
+    recommendation: parsed.recommendation?.trim() || '없음',
+  }
+}
+
+function isFeedbackTripleEmpty(t) {
+  return t.good === '없음' && t.improvement === '없음' && t.recommendation === '없음'
+}
+
 function normalizeFinalVideoReport(payload, fallbackAnswers = []) {
   if (!payload || typeof payload !== 'object') return null
 
   const questions = Array.isArray(payload.questions)
-    ? payload.questions.map((item, idx) => ({
-        index: idx + 1,
-        question: item?.question || '',
-        score: typeof item?.combinedScore === 'number' ? item.combinedScore : null,
-        speech: {
-          good: item?.speech?.good || '없음',
-          improvement: item?.speech?.improvement || '없음',
-          recommendation: item?.speech?.recommendation || '없음',
-        },
-        video: {
-          good: item?.video?.good || '없음',
-          improvement: item?.video?.improvement || '없음',
-          recommendation: item?.video?.recommendation || '없음',
-        },
-        narrative: item?.combinedFeedback || '',
-      }))
+    ? payload.questions.map((item, idx) => {
+        const speechParsed =
+          parseStructuredFeedback(item?.sttFeedback) ??
+          parseStructuredFeedback(item?.speechFeedback) ??
+          parseStructuredFeedback(item?.speech)
+        const videoParsed =
+          parseStructuredFeedback(item?.videoFeedback) ??
+          parseStructuredFeedback(item?.video)
+        return {
+          index: idx + 1,
+          question: item?.question || '',
+          score: typeof item?.combinedScore === 'number' ? item.combinedScore : null,
+          speech: toFeedbackTriple(speechParsed),
+          video: toFeedbackTriple(videoParsed),
+          narrative: item?.combinedFeedback || '',
+        }
+      })
     : []
 
   if (!questions.length) return null
@@ -99,7 +143,10 @@ function normalizeFinalVideoReport(payload, fallbackAnswers = []) {
 
 function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
   const hasScore = typeof q.score === 'number'
-  const hasDetailedFeedback = Boolean(q.speech || q.video || q.narrative)
+  const hasSpeechBlock = q.speech && !isFeedbackTripleEmpty(q.speech)
+  const hasVideoBlock = q.video && !isFeedbackTripleEmpty(q.video)
+  const hasNarrative = Boolean(String(q.narrative ?? '').trim())
+  const hasDetailedFeedback = hasSpeechBlock || hasVideoBlock || hasNarrative
   return (
     <div className="mock-interview__q-section card">
       <div className="mock-interview__q-section-body">
@@ -121,43 +168,47 @@ function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
 
         {hasDetailedFeedback ? (
           <>
-            <div className="mock-interview__q-block">
-              <h4 className="mock-interview__q-block-title">스피치 분석</h4>
-              <ul className="mock-interview__insight-list">
-                <li>
-                  <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
-                  {q.speech?.good || '없음'}
-                </li>
-                <li>
-                  <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">개선점</span>
-                  {q.speech?.improvement || '없음'}
-                </li>
-                <li>
-                  <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">추천</span>
-                  {q.speech?.recommendation || '없음'}
-                </li>
-              </ul>
-            </div>
+            {hasSpeechBlock ? (
+              <div className="mock-interview__q-block">
+                <h4 className="mock-interview__q-block-title">스피치 분석</h4>
+                <ul className="mock-interview__insight-list">
+                  <li>
+                    <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
+                    <span className="mock-interview__insight-body">{q.speech.good}</span>
+                  </li>
+                  <li>
+                    <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">개선점</span>
+                    <span className="mock-interview__insight-body">{q.speech.improvement}</span>
+                  </li>
+                  <li>
+                    <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">추천</span>
+                    <span className="mock-interview__insight-body">{q.speech.recommendation}</span>
+                  </li>
+                </ul>
+              </div>
+            ) : null}
 
-            <div className="mock-interview__q-block">
-              <h4 className="mock-interview__q-block-title">비언어 분석</h4>
-              <ul className="mock-interview__insight-list">
-                <li>
-                  <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
-                  {q.video?.good || '없음'}
-                </li>
-                <li>
-                  <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">개선점</span>
-                  {q.video?.improvement || '없음'}
-                </li>
-                <li>
-                  <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">추천</span>
-                  {q.video?.recommendation || '없음'}
-                </li>
-              </ul>
-            </div>
+            {hasVideoBlock ? (
+              <div className="mock-interview__q-block">
+                <h4 className="mock-interview__q-block-title">비언어 분석</h4>
+                <ul className="mock-interview__insight-list">
+                  <li>
+                    <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
+                    <span className="mock-interview__insight-body">{q.video.good}</span>
+                  </li>
+                  <li>
+                    <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">개선점</span>
+                    <span className="mock-interview__insight-body">{q.video.improvement}</span>
+                  </li>
+                  <li>
+                    <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">추천</span>
+                    <span className="mock-interview__insight-body">{q.video.recommendation}</span>
+                  </li>
+                </ul>
+              </div>
+            ) : null}
 
-            {q.narrative ? (
+            {hasNarrative ? (
               <div className="mock-interview__q-block mock-interview__q-block--narrative">
                 <h4 className="mock-interview__q-block-title">종합 평가</h4>
                 <p className="mock-interview__q-block-text">{q.narrative}</p>

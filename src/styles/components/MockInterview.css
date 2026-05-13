@@ -817,6 +817,13 @@
   color: #7c3aed;
 }
 
+.mock-interview__insight-body {
+  display: block;
+  margin-top: 2px;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
 /* Feedback Phase */
 .mock-interview__feedback {
   display: flex;
