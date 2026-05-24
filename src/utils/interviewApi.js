@@ -231,27 +231,20 @@ export async function submitVideoInterviewAnswer(questionId, payload, accessToke
   return handleResponse(response)
 }
 
-function parseSseEventBlock(block) {
-  const lines = block.split('\n')
-  let event = 'message'
-  const dataLines = []
-
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd()
-    if (!line || line.startsWith(':')) continue
-    if (line.startsWith('event:')) {
-      event = line.slice(6).trim() || 'message'
-      continue
-    }
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart())
-      continue
-    }
-    if (!line.startsWith('id:') && !line.startsWith('retry:')) {
-      dataLines.push(line)
-    }
+function parseMaybeJson(value) {
+  if (value == null) return null
+  if (typeof value === 'object') return value
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return null
   }
+}
 
+function buildSseMessage(event, dataLines) {
   const rawData = dataLines.join('\n')
   if (!rawData) return null
 
@@ -259,28 +252,240 @@ function parseSseEventBlock(block) {
   try {
     parsedData = JSON.parse(rawData)
   } catch {
-    // JSON이 아닐 수 있으므로 문자열 유지
+    // 문자열 그대로 유지
   }
 
   return { event, data: parsedData, rawData }
 }
 
-export async function streamVideoInterviewResult(
-  sessionId,
-  { accessToken, signal, onOpen, onMessage, onError, onDone } = {}
-) {
-  const response = await fetchWithEndpointFallback(
-    [
-      `/interviews/questions/video-answers/${sessionId}/stream`,
-      `/interviews/video-answers/${sessionId}/stream`,
-      `/interviews/me/video-answers/${sessionId}/stream`,
-    ],
-    {
-      method: 'GET',
-      headers: buildHeaders(accessToken, { Accept: 'text/event-stream' }),
-      signal,
+function emitSseEvent(state, onMessage) {
+  if (!state.dataLines.length) return
+  const message = buildSseMessage(state.event, state.dataLines)
+  if (message) onMessage?.(message)
+  state.event = 'message'
+  state.dataLines = []
+}
+
+/** 빈 줄 없이 연속되는 `event:`/`data:` 도 처리하는 SSE 라인 파서 */
+function feedSseLines(state, text, onMessage) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd()
+    if (!line) {
+      emitSseEvent(state, onMessage)
+      continue
     }
+    if (line.startsWith(':')) continue
+
+    if (line.startsWith('event:')) {
+      emitSseEvent(state, onMessage)
+      state.event = line.slice(6).trim().replace(/^\uFEFF/, '') || 'message'
+      continue
+    }
+
+    if (line.startsWith('data:')) {
+      state.dataLines.push(line.slice(5).trimStart().replace(/^\uFEFF/, ''))
+      continue
+    }
+
+    if (!line.startsWith('id:') && !line.startsWith('retry:')) {
+      state.dataLines.push(line)
+    }
+  }
+}
+
+function parseSseEventBlock(block) {
+  const state = { event: 'message', dataLines: [] }
+  feedSseLines(state, block, () => {})
+  emitSseEvent(state, () => {})
+  return buildSseMessage(state.event, state.dataLines)
+}
+
+export function unwrapVideoResultPayload(raw) {
+  const parsed = parseMaybeJson(raw) ?? (typeof raw === 'object' && raw ? raw : null)
+  if (!parsed || typeof parsed !== 'object') return null
+
+  const candidates = [parsed, parsed.data, parsed.result, parsed.payload, parsed.body]
+
+  for (const candidate of candidates) {
+    const node = parseMaybeJson(candidate) ?? candidate
+    if (!node || typeof node !== 'object') continue
+
+    const questionList =
+      (Array.isArray(node.questions) && node.questions) ||
+      (Array.isArray(node.questionResults) && node.questionResults) ||
+      (Array.isArray(node.items) && node.items) ||
+      null
+
+    if (questionList?.length) {
+      return { ...node, questions: questionList }
+    }
+
+    if (
+      node.sessionId != null ||
+      node.summary != null ||
+      node.finalScore != null ||
+      node.overallScore != null
+    ) {
+      return node
+    }
+  }
+
+  return null
+}
+
+function isFinalCompleteSseEvent(event) {
+  if (!event) return false
+  const normalized = String(event).trim().toLowerCase().replace(/_/g, '-')
+  return (
+    normalized === 'final-complete' ||
+    normalized === 'finalcomplete' ||
+    normalized === 'complete' ||
+    normalized === 'done' ||
+    normalized === 'finished'
   )
+}
+
+/** SSE 메시지에서 화상 면접 최종 결과 추출 */
+export function extractVideoInterviewResultFromMessage({ event, data, rawData }) {
+  const payload =
+    unwrapVideoResultPayload(data) ??
+    unwrapVideoResultPayload(rawData) ??
+    unwrapVideoResultPayload(parseMaybeJson(rawData))
+
+  if (!payload) return null
+
+  const eventType =
+    payload.type ?? payload.event ?? payload.status ?? payload.phase ?? null
+  const eventLooksFinal =
+    isFinalCompleteSseEvent(event) ||
+    isFinalCompleteSseEvent(eventType) ||
+    String(eventType ?? '')
+      .toLowerCase()
+      .includes('final')
+
+  const questions = payload.questions
+  if (Array.isArray(questions) && questions.length > 0) return payload
+  if (eventLooksFinal) return payload
+
+  return null
+}
+
+export function isCompleteVideoInterviewResult(payload) {
+  const unwrapped = unwrapVideoResultPayload(payload)
+  if (!unwrapped) return false
+  const questions = unwrapped.questions
+  return Array.isArray(questions) && questions.length > 0
+}
+
+const VIDEO_STREAM_ENDPOINTS = (sessionId) => [
+  `/interviews/questions/video-answers/${sessionId}/stream`,
+  `/interviews/video-answers/${sessionId}/stream`,
+  `/interviews/me/video-answers/${sessionId}/stream`,
+]
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(Object.assign(new Error('스트림 요청이 취소되었습니다.'), { name: 'AbortError' }))
+      return
+    }
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        reject(Object.assign(new Error('스트림 요청이 취소되었습니다.'), { name: 'AbortError' }))
+      },
+      { once: true }
+    )
+  })
+}
+
+async function fetchVideoInterviewStreamResponse(sessionId, { accessToken, signal } = {}) {
+  return fetchWithEndpointFallback(VIDEO_STREAM_ENDPOINTS(sessionId), {
+    method: 'GET',
+    headers: buildHeaders(accessToken, {
+      Accept: 'text/event-stream, application/json',
+    }),
+    signal,
+  })
+}
+
+async function consumeVideoInterviewStreamBody(response, onMessage) {
+  const contentType = (response.headers.get('content-type') || '').toLowerCase()
+
+  if (contentType.includes('application/json')) {
+    const text = await response.text()
+    const json = parseMaybeJson(text)
+    if (json) {
+      onMessage?.({ event: 'message', data: json, rawData: text })
+    }
+    return text
+  }
+
+  if (!response.body) {
+    const text = await response.text()
+    if (text.trim()) {
+      const json = parseMaybeJson(text)
+      if (json) {
+        onMessage?.({ event: 'message', data: json, rawData: text })
+      } else {
+        const state = { event: 'message', dataLines: [] }
+        feedSseLines(state, text, onMessage)
+        emitSseEvent(state, onMessage)
+      }
+    }
+    return text
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let fullText = ''
+  const state = { event: 'message', dataLines: [] }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      const chunk = decoder.decode(value, { stream: true })
+      fullText += chunk
+      buffer += chunk
+      buffer = buffer.replace(/\r\n/g, '\n')
+
+      let newlineIndex = buffer.indexOf('\n')
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex)
+        buffer = buffer.slice(newlineIndex + 1)
+        feedSseLines(state, `${line}\n`, onMessage)
+        newlineIndex = buffer.indexOf('\n')
+      }
+    }
+
+    if (buffer.trim()) {
+      feedSseLines(state, `${buffer}\n`, onMessage)
+    }
+    emitSseEvent(state, onMessage)
+
+    const trimmed = fullText.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const json = parseMaybeJson(trimmed)
+      if (json) onMessage?.({ event: 'message', data: json, rawData: trimmed })
+    }
+
+    return fullText
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+async function streamVideoInterviewResultOnce(
+  sessionId,
+  { accessToken, signal, onOpen, onMessage, onError } = {}
+) {
+  const response = await fetchVideoInterviewStreamResponse(sessionId, { accessToken, signal })
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))
@@ -291,42 +496,77 @@ export async function streamVideoInterviewResult(
     throw error
   }
 
-  if (!response.body) {
-    throw new Error('SSE 응답 스트림을 사용할 수 없습니다.')
-  }
-
   onOpen?.()
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const blocks = buffer.split('\n\n')
-      buffer = blocks.pop() ?? ''
-
-      for (const block of blocks) {
-        const parsed = parseSseEventBlock(block)
-        if (!parsed) continue
-        onMessage?.(parsed)
-      }
-    }
-
-    if (buffer.trim()) {
-      const parsed = parseSseEventBlock(buffer)
-      if (parsed) onMessage?.(parsed)
-    }
-    onDone?.()
+    const rawTail = await consumeVideoInterviewStreamBody(response, onMessage)
+    return { rawTail, contentType: response.headers.get('content-type') || '' }
   } catch (error) {
-    if (error.name === 'AbortError') return
+    if (error.name === 'AbortError') {
+      const abortError = new Error('스트림 요청이 취소되었습니다.')
+      abortError.name = 'AbortError'
+      throw abortError
+    }
     onError?.(error)
     throw error
-  } finally {
-    reader.releaseLock()
   }
+}
+
+export async function streamVideoInterviewResult(
+  sessionId,
+  {
+    accessToken,
+    signal,
+    onOpen,
+    onMessage,
+    onError,
+    onDone,
+    pollIntervalMs = 2500,
+    maxWaitMs = 180000,
+  } = {}
+) {
+  const deadline = Date.now() + maxWaitMs
+  let attempt = 0
+  let lastPayload = null
+
+  while (Date.now() < deadline) {
+    if (signal?.aborted) {
+      const abortError = new Error('스트림 요청이 취소되었습니다.')
+      abortError.name = 'AbortError'
+      throw abortError
+    }
+
+    attempt += 1
+    let attemptPayload = null
+
+    await streamVideoInterviewResultOnce(sessionId, {
+      accessToken,
+      signal,
+      onOpen: attempt === 1 ? onOpen : undefined,
+      onError,
+      onMessage: (message) => {
+        onMessage?.(message)
+        const extracted = extractVideoInterviewResultFromMessage(message)
+        if (extracted) {
+          attemptPayload = extracted
+          lastPayload = extracted
+        }
+      },
+    })
+
+    if (isCompleteVideoInterviewResult(attemptPayload ?? lastPayload)) {
+      onDone?.(lastPayload)
+      return lastPayload
+    }
+
+    if (Date.now() + pollIntervalMs >= deadline) break
+    await sleep(pollIntervalMs, signal)
+  }
+
+  if (lastPayload) {
+    onDone?.(lastPayload)
+    return lastPayload
+  }
+
+  return null
 }

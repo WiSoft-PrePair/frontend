@@ -720,6 +720,48 @@
   box-shadow: 0 12px 40px rgba(64, 81, 115, 0.08);
 }
 
+/* 재답변 */
+.mock-interview__retake-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.mock-interview__retake-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--color-blue-50);
+  border: 1px solid var(--color-blue-100);
+}
+
+.mock-interview__retake-banner-text p {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-dark-600);
+  line-height: 1.5;
+}
+
+.mock-interview__retake-banner-label {
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: var(--color-blue-700);
+  background: white;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  margin-bottom: var(--spacing-xs);
+}
+
+.mock-interview__answer-header-end {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .mock-interview__q-feedbacks {
   display: flex;
   flex-direction: column;
@@ -1258,6 +1300,15 @@
 
   .mock-interview__q-section-body {
     padding: var(--spacing-md) var(--spacing-md) var(--spacing-lg);
+  }
+
+  .mock-interview__retake-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mock-interview__retake-banner .btn {
+    width: 100%;
   }
 
   .mock-interview__q-section-header {

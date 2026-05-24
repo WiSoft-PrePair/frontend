@@ -5,8 +5,10 @@ import { useTTS } from '../hooks/useTTS'
 import { speechFromInterviewQuestion } from '../utils/interviewTts'
 import {
   createVideoInterviewQuestion,
+  extractVideoInterviewResultFromMessage,
   streamVideoInterviewResult,
   submitVideoInterviewAnswer,
+  unwrapVideoResultPayload,
 } from '../utils/interviewApi'
 import Dropdown from './Dropdown'
 import '../styles/components/MockInterview.css'
@@ -124,35 +126,70 @@ function isFeedbackTripleEmpty(t) {
   return t.good === '없음' && t.improvement === '없음' && t.recommendation === '없음'
 }
 
-function normalizeFinalVideoReport(payload, fallbackAnswers = []) {
-  if (!payload || typeof payload !== 'object') return null
+function parseMaybeJson(value) {
+  if (value == null) return null
+  if (typeof value === 'object') return value
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+}
 
-  const questions = Array.isArray(payload.questions)
-    ? payload.questions.map((item, idx) => {
-        const speechParsed =
-          parseStructuredFeedback(item?.sttFeedback) ??
-          parseStructuredFeedback(item?.speechFeedback) ??
-          parseStructuredFeedback(item?.speech)
-        const videoParsed =
-          parseStructuredFeedback(item?.videoFeedback) ??
-          parseStructuredFeedback(item?.video)
-        return {
-          index: idx + 1,
-          question: item?.question || '',
-          score: typeof item?.combinedScore === 'number' ? item.combinedScore : null,
-          speech: toFeedbackTriple(speechParsed),
-          video: toFeedbackTriple(videoParsed),
-          narrative: item?.combinedFeedback || '',
-        }
-      })
-    : []
+function toNumericScore(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function normalizeFinalVideoReport(payload, fallbackAnswers = []) {
+  const root = unwrapVideoResultPayload(payload)
+  if (!root || typeof root !== 'object') return null
+
+  const questionItems = Array.isArray(root.questions)
+    ? root.questions
+    : Array.isArray(root.questionResults)
+      ? root.questionResults
+      : []
+
+  const questions = questionItems.map((item, idx) => {
+    const speechParsed =
+      parseStructuredFeedback(item?.sttFeedback) ??
+      parseStructuredFeedback(item?.speechFeedback) ??
+      parseStructuredFeedback(item?.speech)
+    const videoParsed =
+      parseStructuredFeedback(item?.videoFeedback) ??
+      parseStructuredFeedback(item?.video)
+    return {
+      index: idx + 1,
+      question: item?.question || item?.questionText || '',
+      score:
+        toNumericScore(item?.combinedScore) ??
+        toNumericScore(item?.score) ??
+        toNumericScore(item?.latestScore),
+      speech: toFeedbackTriple(speechParsed),
+      video: toFeedbackTriple(videoParsed),
+      narrative: item?.combinedFeedback || item?.feedback || '',
+    }
+  })
 
   if (!questions.length) return null
 
+  const overallScore =
+    toNumericScore(root.finalScore) ??
+    toNumericScore(root.overallScore) ??
+    toNumericScore(root.averageScore)
+
   return {
     overallSummary:
-      payload.summary || '면접 결과 분석이 완료되었습니다.',
-    overallScore: typeof payload.finalScore === 'number' ? payload.finalScore : null,
+      root.summary || root.overallSummary || '면접 결과 분석이 완료되었습니다.',
+    overallScore,
     questions,
     answers: fallbackAnswers,
   }
@@ -248,6 +285,8 @@ function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
 export default function MockInterview() {
   const { getAccessToken } = useAppState()
   const [phase, setPhase] = useState('ready') // ready | loading | interview | analyzing | feedback
+  const [isRetakeMode, setIsRetakeMode] = useState(false)
+  const [isStartingRetake, setIsStartingRetake] = useState(false)
   const [questionCount, setQuestionCount] = useState(3)
   const [selectedQuestions, setSelectedQuestions] = useState([])
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
@@ -413,19 +452,52 @@ export default function MockInterview() {
     }
   }, [])
 
-  // 비디오 요소에 스트림 연결 (백업용)
-  useEffect(() => {
-    if (phase === 'interview' && videoRef.current && streamRef.current) {
-      const video = videoRef.current
-      if (!video.srcObject) {
-        video.srcObject = streamRef.current
-        video.play().catch(() => {})
-      }
+  const attachStreamToVideo = useCallback(() => {
+    const video = videoRef.current
+    const stream = streamRef.current
+    if (!video || !stream) return false
+    if (video.srcObject !== stream) {
+      video.srcObject = stream
     }
-  }, [phase])
+    void video.play().catch(() => {})
+    return true
+  }, [])
+
+  /** AnimatePresence 전환 후 video가 마운트될 때 스트림 연결 */
+  const bindVideoRef = useCallback(
+    (node) => {
+      videoRef.current = node
+      if (node && phase === 'interview' && streamRef.current) {
+        if (node.srcObject !== streamRef.current) {
+          node.srcObject = streamRef.current
+        }
+        void node.play().catch(() => {})
+      }
+    },
+    [phase]
+  )
+
+  useEffect(() => {
+    if (phase !== 'interview' || !streamRef.current) return undefined
+
+    if (attachStreamToVideo()) return undefined
+
+    let attempts = 0
+    const timer = setInterval(() => {
+      attempts += 1
+      if (attachStreamToVideo() || attempts >= 40) {
+        clearInterval(timer)
+      }
+    }, 100)
+
+    return () => clearInterval(timer)
+  }, [phase, attachStreamToVideo])
 
   // 카메라 정지
   const stopCamera = useCallback(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop())
       streamRef.current = null
@@ -717,12 +789,7 @@ export default function MockInterview() {
 
         setTimeout(() => {
           if (!mockInterviewMountedRef.current) return
-          if (videoRef.current && stream) {
-            videoRef.current.srcObject = stream
-            videoRef.current.onloadedmetadata = () => {
-              videoRef.current.play().catch(() => {})
-            }
-          }
+          attachStreamToVideo()
         }, 500)
 
         setTimeout(() => {
@@ -746,7 +813,15 @@ export default function MockInterview() {
         preloadAbortControllerRef.current = null
       }
     }
-  }, [phase, selectedQuestions, preloadQuestionAudios, startCamera, startAudioAnalysis, speakQuestion])
+  }, [
+    phase,
+    selectedQuestions,
+    preloadQuestionAudios,
+    startCamera,
+    startAudioAnalysis,
+    speakQuestion,
+    attachStreamToVideo,
+  ])
 
   // 녹화 시간 타이머
   useEffect(() => {
@@ -857,6 +932,21 @@ export default function MockInterview() {
 
     const isLast = currentQuestionIndex >= totalQuestions - 1
 
+    if (isRetakeMode) {
+      setAnswers((prev) => {
+        const next = [...prev]
+        next[currentQuestionIndex] = newAnswer
+        answersSnapshotRef.current = next
+        return next
+      })
+      stopCamera()
+      stopAudioAnalysis()
+      stopTTS()
+      setIsRetakeMode(false)
+      setPhase('analyzing')
+      return
+    }
+
     setAnswers((prev) => {
       const next = [...prev, newAnswer]
       if (isLast) answersSnapshotRef.current = next
@@ -888,45 +978,50 @@ export default function MockInterview() {
     try {
       const controller = new AbortController()
       analysisAbortRef.current = controller
-      let finalPayload = null
-
-      await streamVideoInterviewResult(sessionId, {
+      const finalPayload = await streamVideoInterviewResult(sessionId, {
         accessToken: getAccessToken?.(),
         signal: controller.signal,
-        onMessage: ({ event, data }) => {
-          if (event === 'final-complete' && data && typeof data === 'object') {
-            finalPayload = data
+        onMessage: (message) => {
+          const extracted = extractVideoInterviewResultFromMessage(message)
+          if (extracted && import.meta.env.DEV) {
+            console.info('[MockInterview] stream message', message.event, extracted)
           }
         },
       })
 
       const normalized = normalizeFinalVideoReport(finalPayload, answersSnapshotRef.current)
       if (!normalized) {
+        console.warn('[MockInterview] final video payload missing or empty', finalPayload)
         throw new Error('화상 면접 최종 결과를 확인할 수 없습니다.')
       }
 
       setInterviewReport(normalized)
       setBehaviorAnalysis({ overall: normalized.overallScore ?? 0 })
+      setErrorMessage('')
       setPhase('feedback')
     } catch (error) {
+      if (error?.name === 'AbortError') return
       console.error('[MockInterview] streamVideoInterviewResult error:', error)
       setErrorMessage(error?.message || '화상 면접 결과 조회에 실패했습니다.')
-      setPhase('ready')
+      setPhase(interviewReport ? 'feedback' : 'ready')
     } finally {
       analysisAbortRef.current = null
     }
-  }, [videoSessionId, getAccessToken])
+  }, [videoSessionId, getAccessToken, interviewReport])
+
+  const fetchFinalVideoResultRef = useRef(fetchFinalVideoResult)
+  fetchFinalVideoResultRef.current = fetchFinalVideoResult
 
   useEffect(() => {
     if (phase !== 'analyzing') return undefined
 
     setDisplayedOverallScore(0)
-    void fetchFinalVideoResult()
+    void fetchFinalVideoResultRef.current()
 
     return () => {
       analysisAbortRef.current?.abort()
     }
-  }, [phase, fetchFinalVideoResult])
+  }, [phase])
 
   useEffect(() => {
     if (phase !== 'feedback' || !behaviorAnalysis) return undefined
@@ -944,6 +1039,90 @@ export default function MockInterview() {
     return () => cancelAnimationFrame(raf)
   }, [phase, behaviorAnalysis])
 
+  const handleStartRetake = useCallback(
+    async (questionIndex) => {
+      const question = selectedQuestions[questionIndex]
+      if (!question?.id || isStartingRetake) return
+
+      setErrorMessage('')
+      setIsStartingRetake(true)
+      initAudioForMobile()
+
+      try {
+        const { stream, error: cameraStartError } = await startCamera()
+        if (!stream) {
+          setErrorMessage(
+            cameraStartError ||
+              '카메라·마이크를 사용할 수 없어 재답변을 시작할 수 없습니다.'
+          )
+          return
+        }
+
+        pendingAnswerFileRef.current = null
+        recordingPromiseRef.current = null
+        mediaRecorderRef.current = null
+        setHasPendingRecording(false)
+        setIsSubmittingAnswer(false)
+        setIsRecording(false)
+        setCountdown(null)
+        setRecordingTime(0)
+        setIsQuestionVisible(false)
+
+        setIsRetakeMode(true)
+        setCurrentQuestionIndex(questionIndex)
+        setPhase('interview')
+        startAudioAnalysis(stream)
+
+        setTimeout(() => {
+          if (!mockInterviewMountedRef.current) return
+          attachStreamToVideo()
+        }, 0)
+
+        setTimeout(() => {
+          if (!mockInterviewMountedRef.current) return
+          speakQuestion(question)
+        }, 800)
+      } catch (error) {
+        console.error('[MockInterview] handleStartRetake error:', error)
+        setErrorMessage(error?.message || '재답변 준비 중 오류가 발생했습니다.')
+      } finally {
+        setIsStartingRetake(false)
+      }
+    },
+    [
+      selectedQuestions,
+      isStartingRetake,
+      initAudioForMobile,
+      startCamera,
+      startAudioAnalysis,
+      speakQuestion,
+      attachStreamToVideo,
+    ]
+  )
+
+  const handleCancelRetake = useCallback(() => {
+    if (mediaRecorderRef.current?.state === 'recording') {
+      try {
+        mediaRecorderRef.current.stop()
+      } catch {
+        // 이미 종료된 녹화는 무시한다.
+      }
+    }
+    stopCamera()
+    stopAudioAnalysis()
+    stopTTS()
+    setIsRetakeMode(false)
+    setIsRecording(false)
+    setCountdown(null)
+    setRecordingTime(0)
+    setHasPendingRecording(false)
+    setIsSubmittingAnswer(false)
+    pendingAnswerFileRef.current = null
+    recordingPromiseRef.current = null
+    mediaRecorderRef.current = null
+    setPhase('feedback')
+  }, [stopCamera, stopAudioAnalysis, stopTTS])
+
   // 다시 시작
   const handleRestart = () => {
     Object.values(preloadedAudiosRef.current).forEach((url) => {
@@ -952,6 +1131,8 @@ export default function MockInterview() {
     preloadedAudiosRef.current = {}
 
     setPhase('ready')
+    setIsRetakeMode(false)
+    setIsStartingRetake(false)
     setIsFetchingInterviewSetup(false)
     setPreloadError(null)
     setCurrentQuestionIndex(0)
@@ -1015,17 +1196,24 @@ export default function MockInterview() {
         stopAudioAnalysis()
         stopTTS()
 
-        // 프리로딩된 오디오 URL 정리
-        Object.values(preloadedAudiosRef.current).forEach((url) => {
-          URL.revokeObjectURL(url)
-        })
-        preloadedAudiosRef.current = {}
+        if (!isRetakeMode) {
+          Object.values(preloadedAudiosRef.current).forEach((url) => {
+            URL.revokeObjectURL(url)
+          })
+          preloadedAudiosRef.current = {}
+        }
 
-        setPhase('ready')
-        setIsFetchingInterviewSetup(false)
-        setCurrentQuestionIndex(0)
-        setAnswers([])
-        setInterviewReport(null)
+        if (isRetakeMode) {
+          setPhase('feedback')
+          setIsRetakeMode(false)
+          setIsStartingRetake(false)
+        } else {
+          setPhase('ready')
+          setIsFetchingInterviewSetup(false)
+          setCurrentQuestionIndex(0)
+          setAnswers([])
+          setInterviewReport(null)
+        }
         setCountdown(null)
         setRecordingTime(0)
         setIsRecording(false)
@@ -1046,7 +1234,7 @@ export default function MockInterview() {
         window.removeEventListener('popstate', handlePopState)
       }
     }
-  }, [phase, stopCamera, stopAudioAnalysis, stopTTS])
+  }, [phase, isRetakeMode, stopCamera, stopAudioAnalysis, stopTTS])
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60)
@@ -1224,10 +1412,30 @@ export default function MockInterview() {
             exit={{ opacity: 0 }}
             className="mock-interview__session"
           >
+            {isRetakeMode && (
+              <div className="mock-interview__retake-banner card">
+                <div className="mock-interview__retake-banner-text">
+                  <span className="mock-interview__retake-banner-label">재답변</span>
+                  <p>
+                    질문 {currentQuestionIndex + 1}에 다시 답변하고 있습니다. 완료하면 해당 질문만
+                    다시 분석합니다.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--secondary btn--sm"
+                  onClick={handleCancelRetake}
+                  disabled={isSubmittingAnswer}
+                >
+                  취소
+                </button>
+              </div>
+            )}
+
             {/* 비디오 영역 */}
             <div className="mock-interview__video-container">
               <video
-                ref={videoRef}
+                ref={bindVideoRef}
                 autoPlay
                 muted
                 playsInline
@@ -1284,13 +1492,19 @@ export default function MockInterview() {
             {/* 질문 및 컨트롤 */}
             <div className="mock-interview__controls card">
               <div className="mock-interview__progress">
-                <span>질문 {currentQuestionIndex + 1} / {totalQuestions}</span>
-                <div className="mock-interview__progress-bar">
-                  <div
-                    className="mock-interview__progress-fill"
-                    style={{ width: `${((currentQuestionIndex + 1) / totalQuestions) * 100}%` }}
-                  />
-                </div>
+                <span>
+                  {isRetakeMode
+                    ? `질문 ${currentQuestionIndex + 1} 재답변`
+                    : `질문 ${currentQuestionIndex + 1} / ${totalQuestions}`}
+                </span>
+                {!isRetakeMode ? (
+                  <div className="mock-interview__progress-bar">
+                    <div
+                      className="mock-interview__progress-fill"
+                      style={{ width: `${((currentQuestionIndex + 1) / totalQuestions) * 100}%` }}
+                    />
+                  </div>
+                ) : null}
               </div>
 
               <div className="mock-interview__question">
@@ -1321,9 +1535,11 @@ export default function MockInterview() {
                       ? '답변 제출 중...'
                       : hasPendingRecording
                         ? '답변 다시 제출'
-                        : currentQuestionIndex < totalQuestions - 1
-                          ? '다음 질문'
-                          : '면접 완료'}
+                        : isRetakeMode
+                          ? '재답변 완료'
+                          : currentQuestionIndex < totalQuestions - 1
+                            ? '다음 질문'
+                            : '면접 완료'}
                   </button>
                 ) : (
                   <p className="mock-interview__waiting">
@@ -1371,8 +1587,9 @@ export default function MockInterview() {
               </div>
 
               <p className="mock-interview__analyzing-status" role="status" aria-live="polite">
-                면접 결과를 서버에서 가져오는 중입니다.</p>
-                <p className="mock-interview__analyzing-status" role="status" aria-live="polite">
+                면접 결과를 서버에서 가져오는 중입니다.
+              </p>
+              <p className="mock-interview__analyzing-status" role="status" aria-live="polite">
                 완료되는 대로 화면이 바뀝니다.
               </p>
 
@@ -1427,14 +1644,27 @@ export default function MockInterview() {
 
             <div className="mock-interview__answers card">
               <h4>📝 질문별 답변 기록</h4>
+              {errorMessage ? (
+                <p className="mock-interview__preload-error">⚠️ {errorMessage}</p>
+              ) : null}
               <div className="mock-interview__answer-list">
                 {answers.map((answer, idx) => (
-                  <div key={idx} className="mock-interview__answer-item">
+                  <div key={answer.questionId ?? idx} className="mock-interview__answer-item">
                     <div className="mock-interview__answer-header">
                       <span className="badge">Q{idx + 1}</span>
-                      <span className="mock-interview__answer-time">
-                        답변 시간: {formatTime(answer.duration)}
-                      </span>
+                      <div className="mock-interview__answer-header-end">
+                        <span className="mock-interview__answer-time">
+                          답변 시간: {formatTime(answer.duration)}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn--secondary btn--sm mock-interview__retake-btn"
+                          onClick={() => handleStartRetake(idx)}
+                          disabled={isStartingRetake}
+                        >
+                          {isStartingRetake ? '준비 중...' : '다시 답변'}
+                        </button>
+                      </div>
                     </div>
                     <p>{answer.question}</p>
                   </div>
