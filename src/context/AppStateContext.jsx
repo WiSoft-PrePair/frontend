@@ -19,6 +19,22 @@ const STORAGE_COMPANY_HISTORY_KEY = 'prepair_company_history'
 const STORAGE_ACTIVITY_KEY = 'prepair_activity'
 const STORAGE_PURCHASES_KEY = 'prepair_purchases'
 const STORAGE_PRO_USAGE_KEY = 'prepair_pro_usage'
+const STORAGE_MOCK_HISTORY_KEY = 'prepair_mock_interview_history'
+
+function getMockHistoryStorageKey(userId) {
+  return userId ? `${STORAGE_MOCK_HISTORY_KEY}_${userId}` : STORAGE_MOCK_HISTORY_KEY
+}
+
+function loadMockInterviewHistory(userId) {
+  if (!userId) return []
+  try {
+    const saved = localStorage.getItem(getMockHistoryStorageKey(userId))
+    const parsed = saved ? JSON.parse(saved) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
 // 사용자별 포인트/스트릭 영속 저장 (로그아웃 후 재로그인해도 유지)
 const STORAGE_USER_PROGRESS_KEY = 'prepair_user_progress'
 
@@ -137,6 +153,8 @@ export function AppProvider({children}) {
 
   const [lastFeedback, setLastFeedback] = useState(null)
 
+  const [mockInterviewHistory, setMockInterviewHistory] = useState([])
+
   // Pro 플랜 상태 관리
   const [proUsage, setProUsage] = useState(() => {
     try {
@@ -174,6 +192,10 @@ export function AppProvider({children}) {
       })
     }
   }, [user?.id, user?.points, user?.streak])
+
+  useEffect(() => {
+    setMockInterviewHistory(loadMockInterviewHistory(user?.id))
+  }, [user?.id])
 
   // API 응답 user를 앱 user 형태로 정규화
   // - 로그인/회원가입: data.member_info 또는 data.user
@@ -470,6 +492,30 @@ export function AppProvider({children}) {
     return {earnedPoints, isFirstToday}
   }, [scoreHistory, companyHistory])
 
+  const recordMockInterviewSession = useCallback((session) => {
+    if (!session?.sessionId) return
+    setMockInterviewHistory((prev) => {
+      const entry = {
+        sessionId: String(session.sessionId),
+        date: session.date || new Date().toISOString(),
+        overallScore: session.overallScore ?? null,
+        summary: session.summary || '',
+        questionCount: session.questionCount ?? session.questions?.length ?? 0,
+        questionsPreview: session.questionsPreview || [],
+        questions: session.questions || [],
+        source: 'local',
+      }
+      const next = [
+        entry,
+        ...prev.filter((item) => item.sessionId !== entry.sessionId),
+      ].slice(0, 50)
+      if (user?.id) {
+        localStorage.setItem(getMockHistoryStorageKey(user.id), JSON.stringify(next))
+      }
+      return next
+    })
+  }, [user?.id])
+
   // 포인트 차감
   const deductPoints = useCallback((amount) => {
     if (!user || user.points < amount) {
@@ -565,6 +611,7 @@ export function AppProvider({children}) {
     activity,
     purchases,
     lastFeedback,
+    mockInterviewHistory,
     isLoggingOut,
     proUsage,
 
@@ -583,6 +630,7 @@ export function AppProvider({children}) {
     deleteAccount,
     updateProfile,
     recordInterviewResult,
+    recordMockInterviewSession,
     deductPoints,
     redeemReward,
     setCurrentQuestion,

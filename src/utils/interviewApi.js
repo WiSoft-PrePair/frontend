@@ -20,7 +20,7 @@ async function fetchWithEndpointFallback(
       if (response.ok) return response
 
       lastResponse = response
-      if (![404, 405, 500, 502, 503].includes(response.status)) {
+      if (![404, 405, 500, 502, 503, 504].includes(response.status)) {
         return response
       }
     } catch (error) {
@@ -364,25 +364,66 @@ export function extractVideoInterviewResultFromMessage({ event, data, rawData })
       .toLowerCase()
       .includes('final')
 
-  const questions = payload.questions
+  const questions =
+    payload.questions ?? payload.questionResults ?? payload.items
   if (Array.isArray(questions) && questions.length > 0) return payload
-  if (eventLooksFinal) return payload
+  if (eventLooksFinal) return { ...payload, __finalComplete: true }
 
   return null
+}
+
+export function isFinalCompleteVideoInterviewPayload(payload) {
+  if (!payload || typeof payload !== 'object') return false
+  if (payload.__finalComplete === true) return true
+  const unwrapped = unwrapVideoResultPayload(payload)
+  if (!unwrapped) return false
+  return (
+    unwrapped.__finalComplete === true ||
+    (unwrapped.finalScore != null && Boolean(String(unwrapped.summary ?? '').trim()))
+  )
 }
 
 export function isCompleteVideoInterviewResult(payload) {
   const unwrapped = unwrapVideoResultPayload(payload)
   if (!unwrapped) return false
-  const questions = unwrapped.questions
-  return Array.isArray(questions) && questions.length > 0
+  const questions =
+    unwrapped.questions ?? unwrapped.questionResults ?? unwrapped.items
+  if (Array.isArray(questions) && questions.length > 0) return true
+  return isFinalCompleteVideoInterviewPayload(unwrapped)
 }
 
 const VIDEO_STREAM_ENDPOINTS = (sessionId) => [
   `/interviews/questions/video-answers/${sessionId}/stream`,
-  `/interviews/video-answers/${sessionId}/stream`,
-  `/interviews/me/video-answers/${sessionId}/stream`,
 ]
+
+const VIDEO_RESULT_GET_ENDPOINTS = (sessionId) => [
+  `/interviews/questions/video-answers/${sessionId}`,
+]
+
+/** 화상 면접 기록 목록 — 질문 업로드·스트림과 동일한 `/interviews/questions/video-answers` 네임스페이스 */
+const VIDEO_HISTORY_LIST_ENDPOINTS = ['/interviews/questions/video-answers']
+
+/** 녹화 영상 — 답변 업로드(POST …/video-answers)와 대칭되는 GET 경로 */
+const VIDEO_RECORDING_ENDPOINTS = (_sessionId, questionId) => [
+  `/interviews/questions/${questionId}/video-answers/video`,
+  `/interviews/questions/${questionId}/video-answers/recording`,
+]
+
+const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504])
+
+function isRetryableInterviewError(error) {
+  if (!error) return false
+  if (error.name === 'AbortError') return false
+  if (error.isRetryable === true) return true
+  return RETRYABLE_HTTP_STATUSES.has(error.statusCode)
+}
+
+function buildInterviewFetchError(response, fallbackMessage) {
+  const error = new Error(fallbackMessage)
+  error.statusCode = response?.status
+  error.isRetryable = RETRYABLE_HTTP_STATUSES.has(response?.status)
+  return error
+}
 
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
@@ -402,6 +443,37 @@ function sleep(ms, signal) {
   })
 }
 
+function combineAbortSignals(...signals) {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  for (const signal of signals) {
+    if (!signal) continue
+    if (signal.aborted) {
+      abort()
+      break
+    }
+    signal.addEventListener('abort', abort, { once: true })
+  }
+  return controller.signal
+}
+
+function createAttemptTimeoutSignal(timeoutMs, parentSignal) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const onParentAbort = () => {
+    clearTimeout(timer)
+    controller.abort()
+  }
+  parentSignal?.addEventListener('abort', onParentAbort, { once: true })
+  return {
+    signal: combineAbortSignals(parentSignal, controller.signal),
+    clear: () => {
+      clearTimeout(timer)
+      parentSignal?.removeEventListener('abort', onParentAbort)
+    },
+  }
+}
+
 async function fetchVideoInterviewStreamResponse(sessionId, { accessToken, signal } = {}) {
   return fetchWithEndpointFallback(VIDEO_STREAM_ENDPOINTS(sessionId), {
     method: 'GET',
@@ -410,6 +482,32 @@ async function fetchVideoInterviewStreamResponse(sessionId, { accessToken, signa
     }),
     signal,
   })
+}
+
+/** SSE 없이 짧은 GET으로 최종 결과 조회 (게이트웨이 504 회피) */
+async function fetchVideoInterviewResultRest(sessionId, { accessToken, signal } = {}) {
+  const response = await fetchWithEndpointFallback(VIDEO_RESULT_GET_ENDPOINTS(sessionId), {
+    method: 'GET',
+    headers: buildHeaders(accessToken, { Accept: 'application/json' }),
+    signal,
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    const error = new Error(
+      pickApiErrorMessage(errorData) ||
+        (response.status === 504
+          ? '서버 분석이 지연되고 있습니다. 잠시 후 다시 확인합니다.'
+          : '면접 결과 조회에 실패했습니다.')
+    )
+    error.statusCode = response.status
+    error.isRetryable = RETRYABLE_HTTP_STATUSES.has(response.status)
+    throw error
+  }
+
+  const text = await response.text()
+  if (!text.trim()) return null
+  return unwrapVideoResultPayload(parseMaybeJson(text) ?? text)
 }
 
 async function consumeVideoInterviewStreamBody(response, onMessage) {
@@ -483,32 +581,54 @@ async function consumeVideoInterviewStreamBody(response, onMessage) {
 
 async function streamVideoInterviewResultOnce(
   sessionId,
-  { accessToken, signal, onOpen, onMessage, onError } = {}
+  { accessToken, signal, onOpen, onMessage, onError, streamAttemptTimeoutMs } = {}
 ) {
-  const response = await fetchVideoInterviewStreamResponse(sessionId, { accessToken, signal })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    const error = new Error(
-      pickApiErrorMessage(errorData) || 'SSE 연결 중 오류가 발생했습니다.'
-    )
-    error.statusCode = response.status
-    throw error
-  }
-
-  onOpen?.()
+  const timeout =
+    typeof streamAttemptTimeoutMs === 'number' && streamAttemptTimeoutMs > 0
+      ? createAttemptTimeoutSignal(streamAttemptTimeoutMs, signal)
+      : null
+  const attemptSignal = timeout?.signal ?? signal
 
   try {
+    const response = await fetchVideoInterviewStreamResponse(sessionId, {
+      accessToken,
+      signal: attemptSignal,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      const status = response.status
+      const error = new Error(
+        pickApiErrorMessage(errorData) ||
+          (status === 504
+            ? '서버 분석이 지연되고 있습니다. 잠시 후 다시 확인합니다.'
+            : 'SSE 연결 중 오류가 발생했습니다.')
+      )
+      error.statusCode = status
+      error.isRetryable = RETRYABLE_HTTP_STATUSES.has(status)
+      throw error
+    }
+
+    onOpen?.()
+
     const rawTail = await consumeVideoInterviewStreamBody(response, onMessage)
     return { rawTail, contentType: response.headers.get('content-type') || '' }
   } catch (error) {
     if (error.name === 'AbortError') {
-      const abortError = new Error('스트림 요청이 취소되었습니다.')
-      abortError.name = 'AbortError'
-      throw abortError
+      if (signal?.aborted) {
+        const abortError = new Error('스트림 요청이 취소되었습니다.')
+        abortError.name = 'AbortError'
+        throw abortError
+      }
+      const timeoutError = new Error('결과 조회 시간이 초과되어 다시 시도합니다.')
+      timeoutError.statusCode = 504
+      timeoutError.isRetryable = true
+      throw timeoutError
     }
     onError?.(error)
     throw error
+  } finally {
+    timeout?.clear()
   }
 }
 
@@ -521,13 +641,49 @@ export async function streamVideoInterviewResult(
     onMessage,
     onError,
     onDone,
+    onPollAttempt,
     pollIntervalMs = 2500,
     maxWaitMs = 180000,
+    initialDelayMs = 0,
+    streamAttemptTimeoutMs = 22000,
   } = {}
 ) {
   const deadline = Date.now() + maxWaitMs
+  const effectiveInitialDelay = Math.max(0, initialDelayMs)
+  const effectivePollInterval = Math.max(0, pollIntervalMs)
+  const effectiveStreamTimeout = streamAttemptTimeoutMs
+
+  if (effectiveInitialDelay > 0) {
+    await sleep(effectiveInitialDelay, signal)
+  }
+
   let attempt = 0
   let lastPayload = null
+  let lastRetryableError = null
+  let receivedFinalComplete = false
+  let consecutiveStreamFailures = 0
+
+  const applyStreamMessage = (message) => {
+    onMessage?.(message)
+    const extracted = extractVideoInterviewResultFromMessage(message)
+    if (!extracted) return
+    lastPayload = extracted
+    if (isFinalCompleteSseEvent(message?.event) || extracted.__finalComplete) {
+      receivedFinalComplete = true
+    }
+  }
+
+  const finishIfReady = () => {
+    if (receivedFinalComplete && lastPayload) {
+      onDone?.(lastPayload)
+      return lastPayload
+    }
+    if (isCompleteVideoInterviewResult(lastPayload)) {
+      onDone?.(lastPayload)
+      return lastPayload
+    }
+    return null
+  }
 
   while (Date.now() < deadline) {
     if (signal?.aborted) {
@@ -537,36 +693,357 @@ export async function streamVideoInterviewResult(
     }
 
     attempt += 1
-    let attemptPayload = null
+    onPollAttempt?.({ attempt, phase: 'stream' })
 
-    await streamVideoInterviewResultOnce(sessionId, {
-      accessToken,
-      signal,
-      onOpen: attempt === 1 ? onOpen : undefined,
-      onError,
-      onMessage: (message) => {
-        onMessage?.(message)
-        const extracted = extractVideoInterviewResultFromMessage(message)
-        if (extracted) {
-          attemptPayload = extracted
-          lastPayload = extracted
-        }
-      },
-    })
-
-    if (isCompleteVideoInterviewResult(attemptPayload ?? lastPayload)) {
-      onDone?.(lastPayload)
-      return lastPayload
+    let streamReturnedOk = false
+    try {
+      await streamVideoInterviewResultOnce(sessionId, {
+        accessToken,
+        signal,
+        streamAttemptTimeoutMs: effectiveStreamTimeout,
+        onOpen: attempt === 1 ? onOpen : undefined,
+        onError,
+        onMessage: applyStreamMessage,
+      })
+      streamReturnedOk = true
+      consecutiveStreamFailures = 0
+    } catch (error) {
+      if (!isRetryableInterviewError(error)) throw error
+      lastRetryableError = error
+      consecutiveStreamFailures += 1
     }
 
-    if (Date.now() + pollIntervalMs >= deadline) break
-    await sleep(pollIntervalMs, signal)
+    const ready = finishIfReady()
+    if (ready) return ready
+
+    if (Date.now() + effectivePollInterval >= deadline) break
+
+    const failureBackoff = Math.min(
+      Math.max(800, effectivePollInterval || 0) * Math.max(1, consecutiveStreamFailures),
+      15000
+    )
+    const waitMs = streamReturnedOk && !receivedFinalComplete
+      ? Math.max(250, effectivePollInterval)
+      : failureBackoff
+
+    await sleep(waitMs, signal)
   }
 
-  if (lastPayload) {
+  if (lastPayload && (receivedFinalComplete || isCompleteVideoInterviewResult(lastPayload))) {
     onDone?.(lastPayload)
     return lastPayload
   }
 
+  if (lastRetryableError) {
+    const error = new Error(
+      lastRetryableError.statusCode === 504
+        ? '서버 분석이 지연되어 결과를 가져오지 못했습니다. 잠시 후 다시 시도해주세요.'
+        : lastRetryableError.message || '면접 결과 조회에 실패했습니다.'
+    )
+    error.statusCode = lastRetryableError.statusCode
+    error.isRetryable = true
+    throw error
+  }
+
   return null
+}
+
+function toNumericInterviewScore(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+/** API 응답 항목에서 녹화 영상 URL 추출 */
+export function pickVideoRecordingUrl(item) {
+  if (!item || typeof item !== 'object') return null
+  const candidates = [
+    item.videoUrl,
+    item.video_url,
+    item.recordingUrl,
+    item.recording_url,
+    item.answerVideoUrl,
+    item.answer_video_url,
+    item.mediaUrl,
+    item.media_url,
+    item.fileUrl,
+    item.file_url,
+    item.videoPath,
+    item.video_path,
+  ]
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+function normalizeVideoHistoryQuestion(item, idx, sessionId) {
+  const questionId = item?.questionId ?? item?.question_id ?? item?.id ?? null
+  return {
+    index: idx + 1,
+    questionId,
+    question: item?.question ?? item?.questionText ?? item?.text ?? '',
+    score:
+      toNumericInterviewScore(item?.combinedScore) ??
+      toNumericInterviewScore(item?.score) ??
+      toNumericInterviewScore(item?.latestScore),
+    videoUrl: pickVideoRecordingUrl(item),
+    sessionId: item?.sessionId ?? item?.session_id ?? sessionId ?? null,
+  }
+}
+
+function normalizeVideoHistorySessionItem(item) {
+  if (!item || typeof item !== 'object') return null
+  const sessionId =
+    item.sessionId ?? item.session_id ?? item.id ?? item.videoSessionId ?? null
+  if (!sessionId) return null
+
+  const questionItems = Array.isArray(item.questions)
+    ? item.questions
+    : Array.isArray(item.questionResults)
+      ? item.questionResults
+      : Array.isArray(item.items)
+        ? item.items
+        : []
+
+  const questions = questionItems.map((q, idx) =>
+    normalizeVideoHistoryQuestion(q, idx, sessionId)
+  )
+
+  const date =
+    item.completedAt ??
+    item.completed_at ??
+    item.createdAt ??
+    item.created_at ??
+    item.updatedAt ??
+    item.updated_at ??
+    item.date ??
+    null
+
+  return {
+    sessionId: String(sessionId),
+    date: date ? new Date(date).toISOString() : new Date().toISOString(),
+    overallScore:
+      toNumericInterviewScore(item.finalScore) ??
+      toNumericInterviewScore(item.overallScore) ??
+      toNumericInterviewScore(item.averageScore) ??
+      toNumericInterviewScore(item.score),
+    summary: item.summary ?? item.overallSummary ?? item.description ?? '',
+    questionCount: questions.length || item.questionCount || item.totalQuestions || 0,
+    questionsPreview: questions.slice(0, 3).map((q) => q.question).filter(Boolean),
+    questions,
+    source: 'api',
+  }
+}
+
+function extractVideoHistoryRawList(response) {
+  const payload = response?.data ?? response
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.items)) return payload.items
+  if (Array.isArray(payload?.sessions)) return payload.sessions
+  if (Array.isArray(payload?.content)) return payload.content
+  if (Array.isArray(payload?.histories)) return payload.histories
+  if (Array.isArray(payload?.videoAnswers)) return payload.videoAnswers
+  if (Array.isArray(payload?.video_answers)) return payload.video_answers
+  return []
+}
+
+function looksLikeFlatVideoAnswerList(list) {
+  if (!Array.isArray(list) || list.length === 0) return false
+  return list.every(
+    (item) =>
+      item &&
+      typeof item === 'object' &&
+      (item.questionId != null || item.question_id != null || item.id != null) &&
+      !Array.isArray(item.questions) &&
+      !Array.isArray(item.questionResults)
+  )
+}
+
+function groupFlatVideoAnswersBySession(flatList) {
+  const sessions = new Map()
+
+  for (const raw of flatList) {
+    if (!raw || typeof raw !== 'object') continue
+    const sessionId =
+      raw.sessionId ?? raw.session_id ?? raw.videoSessionId ?? raw.video_session_id ?? null
+    if (!sessionId) continue
+
+    const key = String(sessionId)
+    if (!sessions.has(key)) {
+      sessions.set(key, {
+        sessionId: key,
+        session_id: key,
+        questions: [],
+        completedAt:
+          raw.completedAt ??
+          raw.completed_at ??
+          raw.createdAt ??
+          raw.created_at ??
+          raw.updatedAt ??
+          raw.updated_at ??
+          null,
+        finalScore: raw.finalScore ?? raw.final_score ?? raw.overallScore ?? raw.overall_score,
+        overallScore: raw.overallScore ?? raw.overall_score ?? raw.finalScore ?? raw.final_score,
+        summary: raw.summary ?? raw.overallSummary ?? raw.overall_summary ?? '',
+      })
+    }
+
+    const session = sessions.get(key)
+    session.questions.push(raw)
+
+    const sessionDate =
+      raw.completedAt ??
+      raw.completed_at ??
+      raw.createdAt ??
+      raw.created_at ??
+      raw.updatedAt ??
+      raw.updated_at
+    if (sessionDate && !session.completedAt) session.completedAt = sessionDate
+
+    const sessionScore =
+      raw.finalScore ?? raw.final_score ?? raw.overallScore ?? raw.overall_score ?? raw.sessionScore
+    if (sessionScore != null) {
+      session.finalScore = sessionScore
+      session.overallScore = sessionScore
+    }
+
+    const sessionSummary = raw.summary ?? raw.overallSummary ?? raw.overall_summary
+    if (sessionSummary && !session.summary) session.summary = sessionSummary
+  }
+
+  return Array.from(sessions.values())
+}
+
+/** 화상 면접 기록 목록 응답 정규화 */
+export function normalizeVideoInterviewHistoryList(response) {
+  let list = extractVideoHistoryRawList(response)
+
+  if (looksLikeFlatVideoAnswerList(list)) {
+    list = groupFlatVideoAnswersBySession(list)
+  }
+
+  return list
+    .map(normalizeVideoHistorySessionItem)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+}
+
+/** 화상 면접 기록 목록 조회 */
+export async function getVideoInterviewHistories(accessToken, { signal } = {}) {
+  const response = await fetch(`${API_BASE}${VIDEO_HISTORY_LIST_ENDPOINTS[0]}`, {
+    method: 'GET',
+    headers: buildHeaders(accessToken, { Accept: 'application/json' }),
+    signal,
+  })
+
+  if (!response.ok) {
+    // 목록 API 미구현·서버 오류 시 로컬 기록만 사용
+    if ([404, 405, 500, 501, 502, 503, 504].includes(response.status)) {
+      return []
+    }
+    return normalizeVideoInterviewHistoryList(await handleResponse(response))
+  }
+
+  const data = await response.json().catch(() => ({}))
+  return normalizeVideoInterviewHistoryList(data)
+}
+
+/** 화상 면접 세션 상세(피드백·질문·영상 URL) 조회 */
+export async function getVideoInterviewSessionDetail(sessionId, accessToken, { signal } = {}) {
+  if (!sessionId) return null
+
+  try {
+    const payload = await fetchVideoInterviewResultRest(sessionId, { accessToken, signal })
+    if (!payload) return null
+
+    const root = unwrapVideoResultPayload(payload) ?? payload
+    const sessionMeta = normalizeVideoHistorySessionItem({
+      ...root,
+      sessionId,
+      session_id: sessionId,
+      id: sessionId,
+    })
+
+    if (!sessionMeta) return null
+
+    const questionItems = Array.isArray(root?.questions)
+      ? root.questions
+      : Array.isArray(root?.questionResults)
+        ? root.questionResults
+        : []
+
+    if (questionItems.length) {
+      sessionMeta.questions = questionItems.map((item, idx) =>
+        normalizeVideoHistoryQuestion(item, idx, sessionId)
+      )
+      sessionMeta.questionCount = sessionMeta.questions.length
+      sessionMeta.questionsPreview = sessionMeta.questions
+        .slice(0, 3)
+        .map((q) => q.question)
+        .filter(Boolean)
+    }
+
+    return sessionMeta
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    return null
+  }
+}
+
+function resolveRecordingFetchUrl(videoUrl) {
+  if (!videoUrl) return null
+  if (/^https?:\/\//i.test(videoUrl)) return videoUrl
+  if (videoUrl.startsWith('/api/')) return videoUrl
+  if (videoUrl.startsWith('/')) return `${API_BASE}${videoUrl}`
+  return `${API_BASE}/${videoUrl}`
+}
+
+/** 인증이 필요한 녹화 영상 blob 조회 (video 태그 재생용) */
+export async function fetchVideoInterviewRecording(
+  { sessionId, questionId, videoUrl },
+  accessToken,
+  { signal } = {}
+) {
+  const token = requireAccessToken(accessToken)
+  const authHeaders = { Authorization: `Bearer ${token}` }
+
+  const directUrl = resolveRecordingFetchUrl(videoUrl)
+  if (directUrl) {
+    const response = await fetch(directUrl, { headers: authHeaders, signal })
+    if (response.ok) {
+      const blob = await response.blob()
+      if (blob.size > 0) return blob
+    }
+  }
+
+  if (!sessionId || !questionId) {
+    throw new Error('녹화 영상을 불러올 수 없습니다.')
+  }
+
+  let lastResponse = null
+  for (const endpoint of VIDEO_RECORDING_ENDPOINTS(sessionId, questionId)) {
+    try {
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'GET',
+        headers: authHeaders,
+        signal,
+      })
+      if (response.ok) {
+        const blob = await response.blob()
+        if (blob.size > 0) return blob
+      }
+      lastResponse = response
+      if (![404, 405].includes(response.status)) break
+    } catch (error) {
+      if (error.name === 'AbortError') throw error
+    }
+  }
+
+  const error = new Error('녹화 영상을 불러올 수 없습니다.')
+  error.statusCode = lastResponse?.status
+  throw error
 }

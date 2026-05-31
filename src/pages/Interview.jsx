@@ -4,6 +4,7 @@ import { motion as Motion, AnimatePresence } from 'framer-motion'
 import { useAppState } from '../context/AppStateContext'
 import useMediaQuery from '../hooks/useMediaQuery'
 import MockInterview from '../components/MockInterview'
+import MockInterviewHistory from '../components/MockInterviewHistory'
 import ProUpgradeModal, { ProTab } from '../components/ProUpgradeModal'
 import {
   createCompanyInterviewQuestion,
@@ -390,7 +391,7 @@ export default function CoachPage() {
     }
   }
 
-  // History sub-tab: 'general', 'company', or 'summary'
+  // History sub-tab: 'general', 'company', 'mock', or 'summary'
   const [historySubTab, setHistorySubTab] = useState('general')
 
   // Mobile detection
@@ -1007,6 +1008,12 @@ export default function CoachPage() {
                 기업 면접
               </button>
               <button
+                className={`coach__history-subtab ${historySubTab === 'mock' ? 'coach__history-subtab--active' : ''}`}
+                onClick={() => setHistorySubTab('mock')}
+              >
+                모의 면접
+              </button>
+              <button
                 className={`coach__history-subtab coach__history-subtab--pro ${historySubTab === 'summary' ? 'coach__history-subtab--active' : ''}`}
                 onClick={() => {
                   if (!isPro) {
@@ -1136,6 +1143,11 @@ export default function CoachPage() {
                   })()}
                 </div>
               </Motion.div>
+            ) : historySubTab === 'mock' ? (
+              <MockInterviewHistory
+                isMobile={isMobile}
+                onStartMockInterview={() => setActiveTab('mock')}
+              />
             ) : histories.length === 0 ? (
               <div className="coach__empty card">
                 <span className="coach__empty-icon">📝</span>

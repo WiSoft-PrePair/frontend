@@ -522,6 +522,10 @@
   margin-bottom: var(--spacing-lg);
 }
 
+.rewards__service-preparing h3 {
+  color: var(--color-dark-700);
+}
+
 /* Reward Tabs */
 .reward__tabs {
   display: flex;
