@@ -6,6 +6,9 @@ import { speechFromInterviewQuestion } from '../utils/interviewTts'
 import {
   createVideoInterviewQuestion,
   extractVideoInterviewResultFromMessage,
+  getVideoInterviewSessionDetail,
+  retryVideoInterviewQuestion,
+  retryVideoInterviewQuestions,
   streamVideoInterviewResult,
   submitVideoInterviewAnswer,
   unwrapVideoResultPayload,
@@ -320,6 +323,11 @@ function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
 export default function MockInterview() {
   const { getAccessToken, recordMockInterviewSession } = useAppState()
   const [phase, setPhase] = useState('ready') // ready | loading | interview | analyzing | feedback
+  const [isRetakeMode, setIsRetakeMode] = useState(false)
+  const [isStartingRetake, setIsStartingRetake] = useState(false)
+  const [selectedRetakeIndexes, setSelectedRetakeIndexes] = useState(() => new Set())
+  const [retakeQueueMeta, setRetakeQueueMeta] = useState(null)
+  const retakeQueueRef = useRef([])
   const [questionCount, setQuestionCount] = useState(3)
   const [selectedQuestions, setSelectedQuestions] = useState([])
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
@@ -397,6 +405,81 @@ export default function MockInterview() {
 
   const currentQuestion = selectedQuestions[currentQuestionIndex]
   const totalQuestions = selectedQuestions.length
+
+  const getQuestionIdAtIndex = useCallback(
+    (index) =>
+      selectedQuestions[index]?.id ??
+      interviewReport?.questions?.[index]?.questionId ??
+      answers[index]?.questionId ??
+      null,
+    [selectedQuestions, interviewReport, answers]
+  )
+
+  const requestRetakeOnServer = useCallback(
+    async (sortedIndexes) => {
+      const previousSessionId = videoSessionId
+      if (!previousSessionId) {
+        throw new Error('화상 면접 세션 정보가 없습니다.')
+      }
+      const accessToken = getAccessToken?.()
+      const questionIds = sortedIndexes.map((index) => {
+        const questionId = getQuestionIdAtIndex(index)
+        if (questionId == null || questionId === '') {
+          throw new Error(`질문 ${index + 1}의 ID를 찾을 수 없습니다.`)
+        }
+        return String(questionId)
+      })
+
+      const { sessionId: newSessionId } =
+        questionIds.length === 1
+          ? await retryVideoInterviewQuestion(
+              previousSessionId,
+              questionIds[0],
+              accessToken
+            )
+          : await retryVideoInterviewQuestions(previousSessionId, questionIds, accessToken)
+
+      return { newSessionId, sortedIndexes }
+    },
+    [videoSessionId, getAccessToken, getQuestionIdAtIndex]
+  )
+
+  const buildRetakeQuestions = useCallback(
+    async (newSessionId, sortedIndexes) => {
+      const accessToken = getAccessToken?.()
+      const detail = await getVideoInterviewSessionDetail(newSessionId, accessToken)
+      const apiQuestions = detail?.questions ?? []
+
+      if (apiQuestions.length === sortedIndexes.length) {
+        return apiQuestions.map((q, i) => {
+          const prevIndex = sortedIndexes[i]
+          return {
+            id: String(q.questionId ?? q.id ?? getQuestionIdAtIndex(prevIndex)),
+            text: q.question || selectedQuestions[prevIndex]?.text || '',
+            category: selectedQuestions[prevIndex]?.category ?? 'VIDEO',
+            sessionId: newSessionId,
+          }
+        })
+      }
+
+      return sortedIndexes.map((prevIndex) => {
+        const prev = selectedQuestions[prevIndex]
+        const prevText = prev?.text ?? answers[prevIndex]?.question ?? ''
+        const matched =
+          apiQuestions.find((q) => (q.question || '').trim() === prevText.trim()) ??
+          apiQuestions[sortedIndexes.indexOf(prevIndex)]
+        return {
+          id: String(
+            matched?.questionId ?? matched?.id ?? getQuestionIdAtIndex(prevIndex)
+          ),
+          text: matched?.question || prevText,
+          category: prev?.category ?? 'VIDEO',
+          sessionId: newSessionId,
+        }
+      })
+    },
+    [getAccessToken, selectedQuestions, answers, getQuestionIdAtIndex]
+  )
 
   const startVideoRecording = useCallback((questionId) => {
     if (!streamRef.current) return
@@ -969,6 +1052,43 @@ export default function MockInterview() {
 
     const isLast = currentQuestionIndex >= totalQuestions - 1
 
+    if (isRetakeMode) {
+      setAnswers((prev) => {
+        const next = [...prev]
+        next[currentQuestionIndex] = newAnswer
+        answersSnapshotRef.current = next
+        return next
+      })
+
+      const pendingQueue = retakeQueueRef.current
+      if (pendingQueue.length > 0) {
+        const [nextIndex, ...rest] = pendingQueue
+        retakeQueueRef.current = rest
+        setRetakeQueueMeta((prev) =>
+          prev ? { ...prev, current: prev.current + 1 } : { current: 2, total: 2 }
+        )
+        setCurrentQuestionIndex(nextIndex)
+        setIsQuestionVisible(false)
+        setRecordingTime(0)
+        setTimeout(() => {
+          if (!mockInterviewMountedRef.current) return
+          speakQuestion(selectedQuestions[nextIndex])
+        }, 500)
+        return
+      }
+
+      stopCamera()
+      stopAudioAnalysis()
+      stopTTS()
+      setIsRetakeMode(false)
+      setRetakeQueueMeta(null)
+      retakeQueueRef.current = []
+      setSelectedRetakeIndexes(new Set())
+      setAnalysisStatusMessage('재답변 결과를 분석하고 있습니다…')
+      setPhase('analyzing')
+      return
+    }
+
     setAnswers((prev) => {
       const next = [...prev, newAnswer]
       if (isLast) answersSnapshotRef.current = next
@@ -1099,6 +1219,144 @@ export default function MockInterview() {
     return () => cancelAnimationFrame(raf)
   }, [phase, behaviorAnalysis])
 
+  const beginRetakeInterview = useCallback(
+    async (questionIndex) => {
+      const question = selectedQuestions[questionIndex]
+      if (!question?.id) {
+        throw new Error('재답변할 질문 정보가 없습니다.')
+      }
+
+      initAudioForMobile()
+
+      const { stream, error: cameraStartError } = await startCamera()
+      if (!stream) {
+        throw new Error(
+          cameraStartError || '카메라·마이크를 사용할 수 없어 재답변을 시작할 수 없습니다.'
+        )
+      }
+
+      pendingAnswerFileRef.current = null
+      recordingPromiseRef.current = null
+      mediaRecorderRef.current = null
+      setHasPendingRecording(false)
+      setIsSubmittingAnswer(false)
+      setIsRecording(false)
+      setCountdown(null)
+      setRecordingTime(0)
+      setIsQuestionVisible(false)
+
+      setIsRetakeMode(true)
+      setCurrentQuestionIndex(questionIndex)
+      setPhase('interview')
+      startAudioAnalysis(stream)
+
+      setTimeout(() => {
+        if (!mockInterviewMountedRef.current) return
+        attachStreamToVideo()
+      }, 0)
+
+      setTimeout(() => {
+        if (!mockInterviewMountedRef.current) return
+        speakQuestion(question)
+      }, 800)
+    },
+    [selectedQuestions, initAudioForMobile, startCamera, startAudioAnalysis, speakQuestion, attachStreamToVideo]
+  )
+
+  const startRetakeQueue = useCallback(
+    async (sortedIndexes) => {
+      if (!sortedIndexes.length || isStartingRetake) return
+
+      setErrorMessage('')
+      setIsStartingRetake(true)
+
+      try {
+        const { newSessionId, sortedIndexes: indexes } =
+          await requestRetakeOnServer(sortedIndexes)
+        const retakeQuestions = await buildRetakeQuestions(newSessionId, indexes)
+        const retakeAnswers = indexes.map((idx) => answers[idx]).filter(Boolean)
+
+        setVideoSessionId(newSessionId)
+        setSelectedQuestions(retakeQuestions)
+        setAnswers(retakeAnswers)
+        answersSnapshotRef.current = [...retakeAnswers]
+
+        retakeQueueRef.current =
+          retakeQuestions.length > 1
+            ? Array.from({ length: retakeQuestions.length - 1 }, (_, i) => i + 1)
+            : []
+        setRetakeQueueMeta({ current: 1, total: retakeQuestions.length })
+        await beginRetakeInterview(0)
+      } catch (error) {
+        console.error('[MockInterview] startRetakeQueue error:', error)
+        setErrorMessage(error?.message || '재답변 준비에 실패했습니다.')
+        retakeQueueRef.current = []
+        setRetakeQueueMeta(null)
+      } finally {
+        setIsStartingRetake(false)
+      }
+    },
+    [isStartingRetake, requestRetakeOnServer, buildRetakeQuestions, answers, beginRetakeInterview]
+  )
+
+  const handleStartSelectedRetakes = useCallback(() => {
+    const sortedIndexes = [...selectedRetakeIndexes].sort((a, b) => a - b)
+    if (!sortedIndexes.length) {
+      setErrorMessage('다시 답변할 질문을 선택해주세요.')
+      return
+    }
+    void startRetakeQueue(sortedIndexes)
+  }, [selectedRetakeIndexes, startRetakeQueue])
+
+  const handleStartAllRetakes = useCallback(() => {
+    const sortedIndexes = answers.map((_, index) => index)
+    if (!sortedIndexes.length) return
+    setSelectedRetakeIndexes(new Set(sortedIndexes))
+    void startRetakeQueue(sortedIndexes)
+  }, [answers, startRetakeQueue])
+
+  const handleToggleRetakeSelection = useCallback((index) => {
+    setSelectedRetakeIndexes((prev) => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }, [])
+
+  const handleSelectAllRetakes = useCallback(() => {
+    setSelectedRetakeIndexes(new Set(answers.map((_, index) => index)))
+  }, [answers])
+
+  const handleClearRetakeSelection = useCallback(() => {
+    setSelectedRetakeIndexes(new Set())
+  }, [])
+
+  const handleCancelRetake = useCallback(() => {
+    if (mediaRecorderRef.current?.state === 'recording') {
+      try {
+        mediaRecorderRef.current.stop()
+      } catch {
+        // 이미 종료된 녹화는 무시한다.
+      }
+    }
+    stopCamera()
+    stopAudioAnalysis()
+    stopTTS()
+    setIsRetakeMode(false)
+    setRetakeQueueMeta(null)
+    retakeQueueRef.current = []
+    setIsRecording(false)
+    setCountdown(null)
+    setRecordingTime(0)
+    setHasPendingRecording(false)
+    setIsSubmittingAnswer(false)
+    pendingAnswerFileRef.current = null
+    recordingPromiseRef.current = null
+    mediaRecorderRef.current = null
+    setPhase('feedback')
+  }, [stopCamera, stopAudioAnalysis, stopTTS])
+
   // 다시 시작
   const handleRestart = () => {
     Object.values(preloadedAudiosRef.current).forEach((url) => {
@@ -1107,6 +1365,11 @@ export default function MockInterview() {
     preloadedAudiosRef.current = {}
 
     setPhase('ready')
+    setIsRetakeMode(false)
+    setIsStartingRetake(false)
+    setRetakeQueueMeta(null)
+    retakeQueueRef.current = []
+    setSelectedRetakeIndexes(new Set())
     setIsFetchingInterviewSetup(false)
     setPreloadError(null)
     setCurrentQuestionIndex(0)
@@ -1177,6 +1440,11 @@ export default function MockInterview() {
         preloadedAudiosRef.current = {}
 
         setPhase('ready')
+        setIsRetakeMode(false)
+        setIsStartingRetake(false)
+        setRetakeQueueMeta(null)
+        retakeQueueRef.current = []
+        setSelectedRetakeIndexes(new Set())
         setIsFetchingInterviewSetup(false)
         setCurrentQuestionIndex(0)
         setAnswers([])
@@ -1380,6 +1648,29 @@ export default function MockInterview() {
             exit={{ opacity: 0 }}
             className="mock-interview__session"
           >
+            {isRetakeMode ? (
+              <div className="mock-interview__retake-banner card">
+                <div className="mock-interview__retake-banner-text">
+                  <span className="mock-interview__retake-banner-label">재답변</span>
+                  <p>
+                    {retakeQueueMeta && retakeQueueMeta.total > 1
+                      ? `선택한 질문 ${retakeQueueMeta.current}/${retakeQueueMeta.total} — Q${currentQuestionIndex + 1}에 다시 답변 중입니다.`
+                      : `질문 ${currentQuestionIndex + 1}에 다시 답변하고 있습니다.`}
+                    {retakeQueueMeta && retakeQueueMeta.total > 1
+                      ? ' 모든 재답변을 마치면 결과를 다시 분석합니다.'
+                      : ' 완료 후 결과를 다시 분석합니다.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={handleCancelRetake}
+                >
+                  취소
+                </button>
+              </div>
+            ) : null}
+
             {/* 비디오 영역 */}
             <div className="mock-interview__video-container">
               <video
@@ -1441,12 +1732,20 @@ export default function MockInterview() {
             <div className="mock-interview__controls card">
               <div className="mock-interview__progress">
                 <span>
-                  질문 {currentQuestionIndex + 1} / {totalQuestions}
+                  {isRetakeMode && retakeQueueMeta
+                    ? `재답변 ${retakeQueueMeta.current} / ${retakeQueueMeta.total}`
+                    : `질문 ${currentQuestionIndex + 1} / ${totalQuestions}`}
                 </span>
                 <div className="mock-interview__progress-bar">
                   <div
                     className="mock-interview__progress-fill"
-                    style={{ width: `${((currentQuestionIndex + 1) / totalQuestions) * 100}%` }}
+                    style={{
+                      width: `${
+                        isRetakeMode && retakeQueueMeta
+                          ? (retakeQueueMeta.current / retakeQueueMeta.total) * 100
+                          : ((currentQuestionIndex + 1) / totalQuestions) * 100
+                      }%`,
+                    }}
                   />
                 </div>
               </div>
@@ -1479,9 +1778,13 @@ export default function MockInterview() {
                       ? '답변 제출 중...'
                       : hasPendingRecording
                         ? '답변 다시 제출'
-                        : currentQuestionIndex < totalQuestions - 1
-                          ? '다음 질문'
-                          : '면접 완료'}
+                        : isRetakeMode
+                          ? retakeQueueMeta && retakeQueueMeta.current < retakeQueueMeta.total
+                            ? '다음 재답변'
+                            : '재답변 완료'
+                          : currentQuestionIndex < totalQuestions - 1
+                            ? '다음 질문'
+                            : '면접 완료'}
                   </button>
                 ) : (
                   <p className="mock-interview__waiting">
@@ -1581,27 +1884,86 @@ export default function MockInterview() {
             </div>
 
             <div className="mock-interview__answers card">
-              <h4>📝 질문별 답변 기록</h4>
+              <div className="mock-interview__answers-head">
+                <h4>📝 질문별 답변 기록</h4>
+                <p className="mock-interview__answers-hint">
+                  다시 답변할 질문을 선택하거나 전체를 다시 진행할 수 있습니다.
+                </p>
+              </div>
+
               {errorMessage ? (
                 <p className="mock-interview__preload-error">⚠️ {errorMessage}</p>
               ) : null}
+
+              <div className="mock-interview__retake-toolbar">
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={handleSelectAllRetakes}
+                  disabled={isStartingRetake}
+                >
+                  전체 선택
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={handleClearRetakeSelection}
+                  disabled={isStartingRetake}
+                >
+                  선택 해제
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--secondary btn--sm"
+                  disabled={isStartingRetake || selectedRetakeIndexes.size === 0}
+                  onClick={handleStartSelectedRetakes}
+                >
+                  {isStartingRetake
+                    ? '준비 중…'
+                    : `선택 질문 다시 답변${selectedRetakeIndexes.size > 0 ? ` (${selectedRetakeIndexes.size})` : ''}`}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary btn--sm"
+                  disabled={isStartingRetake}
+                  onClick={handleStartAllRetakes}
+                >
+                  {isStartingRetake ? '준비 중…' : '전체 다시 답변'}
+                </button>
+              </div>
+
               <div className="mock-interview__answer-list">
-                {answers.map((answer, idx) => (
-                  <div key={answer.questionId ?? idx} className="mock-interview__answer-item">
-                    <div className="mock-interview__answer-header">
-                      <span className="badge">Q{idx + 1}</span>
-                      <span className="mock-interview__answer-time">
-                        답변 시간: {formatTime(answer.duration)}
-                      </span>
-                    </div>
-                    <p>{answer.question}</p>
-                  </div>
-                ))}
+                {answers.map((answer, idx) => {
+                  const isSelected = selectedRetakeIndexes.has(idx)
+                  return (
+                    <label
+                      key={answer.questionId ?? idx}
+                      className={`mock-interview__answer-item mock-interview__answer-item--selectable${isSelected ? ' mock-interview__answer-item--selected' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mock-interview__answer-checkbox"
+                        checked={isSelected}
+                        disabled={isStartingRetake}
+                        onChange={() => handleToggleRetakeSelection(idx)}
+                      />
+                      <div className="mock-interview__answer-item-body">
+                        <div className="mock-interview__answer-header">
+                          <span className="badge">Q{idx + 1}</span>
+                          <span className="mock-interview__answer-time">
+                            답변 시간: {formatTime(answer.duration)}
+                          </span>
+                        </div>
+                        <p>{answer.question}</p>
+                      </div>
+                    </label>
+                  )
+                })}
               </div>
             </div>
 
             <button className="btn btn--primary btn--lg btn--block" onClick={handleRestart}>
-              다시 연습하기
+              새 질문으로 다시 연습하기
             </button>
           </Motion.div>
         )}

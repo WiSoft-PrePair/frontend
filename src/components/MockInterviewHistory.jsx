@@ -5,6 +5,8 @@ import {
   getVideoInterviewHistories,
   getVideoInterviewSessionDetail,
   fetchVideoInterviewRecording,
+  isInterviewFeedbackTripleEmpty,
+  resolveInterviewMediaUrl,
 } from '../utils/interviewApi'
 
 const ITEMS_PER_PAGE = 5
@@ -27,6 +29,123 @@ function formatSessionDate(dateStr) {
   })
 }
 
+function getSessionQuestionTitle(item) {
+  const fromPreview = item?.questionsPreview?.find(
+    (text) => typeof text === 'string' && text.trim()
+  )
+  if (fromPreview) return fromPreview.trim()
+
+  const fromQuestions = item?.questions
+    ?.map((q) => q?.question)
+    .find((text) => typeof text === 'string' && text.trim())
+  if (fromQuestions) return fromQuestions.trim()
+
+  const fallback =
+    item?.firstQuestion ??
+    item?.first_question ??
+    item?.representativeQuestion ??
+    item?.questionPreview ??
+    item?.question_preview
+  if (typeof fallback === 'string' && fallback.trim()) return fallback.trim()
+
+  return null
+}
+
+async function enrichSessionsWithQuestionPreviews(sessions, accessToken, signal) {
+  if (!accessToken || !sessions?.length) return sessions
+
+  return Promise.all(
+    sessions.map(async (session) => {
+      if (getSessionQuestionTitle(session)) return session
+      try {
+        const detail = await getVideoInterviewSessionDetail(session.sessionId, accessToken, {
+          signal,
+        })
+        const previews =
+          detail?.questions?.map((q) => q.question).filter(Boolean) ??
+          detail?.questionsPreview ??
+          []
+        if (!previews.length) return session
+        return {
+          ...session,
+          questionsPreview: previews,
+          questions: detail.questions ?? session.questions,
+          questionCount: detail.questionCount || previews.length,
+        }
+      } catch {
+        return session
+      }
+    })
+  )
+}
+
+function QuestionFeedbackPanel({ question, getScoreColor }) {
+  const hasSpeech = question?.speech && !isInterviewFeedbackTripleEmpty(question.speech)
+  const hasVideo = question?.video && !isInterviewFeedbackTripleEmpty(question.video)
+  const narrative = String(question?.narrative ?? question?.combinedFeedback ?? '').trim()
+  const hasNarrative = Boolean(narrative)
+
+  if (!hasSpeech && !hasVideo && !hasNarrative) return null
+
+  return (
+    <div className="mock-history__feedback">
+      {hasSpeech ? (
+        <div className="mock-interview__q-block">
+          <h4 className="mock-interview__q-block-title">스피치 분석</h4>
+          <ul className="mock-interview__insight-list">
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
+              <span className="mock-interview__insight-body">{question.speech.good}</span>
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">개선점</span>
+              <span className="mock-interview__insight-body">{question.speech.improvement}</span>
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">추천</span>
+              <span className="mock-interview__insight-body">{question.speech.recommendation}</span>
+            </li>
+          </ul>
+        </div>
+      ) : null}
+
+      {hasVideo ? (
+        <div className="mock-interview__q-block">
+          <h4 className="mock-interview__q-block-title">비언어 분석</h4>
+          <ul className="mock-interview__insight-list">
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--ok">잘한 점</span>
+              <span className="mock-interview__insight-body">{question.video.good}</span>
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--warn">개선점</span>
+              <span className="mock-interview__insight-body">{question.video.improvement}</span>
+            </li>
+            <li>
+              <span className="mock-interview__insight-tag mock-interview__insight-tag--tip">추천</span>
+              <span className="mock-interview__insight-body">{question.video.recommendation}</span>
+            </li>
+          </ul>
+        </div>
+      ) : null}
+
+      {hasNarrative ? (
+        <div className="mock-interview__q-block mock-interview__q-block--narrative">
+          <h4 className="mock-interview__q-block-title">종합 평가</h4>
+          <p className="mock-interview__q-block-text">{narrative}</p>
+        </div>
+      ) : null}
+
+      {typeof question.score === 'number' ? (
+        <p className="mock-history__question-score">
+          이 질문 점수:{' '}
+          <strong style={{ color: getScoreColor(question.score) }}>{question.score}점</strong>
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function mergeMockHistories(apiList, localList) {
   const map = new Map()
   for (const item of localList) {
@@ -43,10 +162,11 @@ function mergeMockHistories(apiList, localList) {
   )
 }
 
-function AuthenticatedVideoPlayer({ sessionId, questionId, videoUrl, getAccessToken }) {
+function AuthenticatedVideoPlayer({ mediaUrl, videoUrl, getAccessToken }) {
   const [objectUrl, setObjectUrl] = useState(null)
   const [status, setStatus] = useState('loading')
   const objectUrlRef = useRef(null)
+  const playbackSource = mediaUrl || videoUrl
 
   useEffect(() => {
     const controller = new AbortController()
@@ -60,10 +180,28 @@ function AuthenticatedVideoPlayer({ sessionId, questionId, videoUrl, getAccessTo
         objectUrlRef.current = null
       }
 
+      if (!playbackSource) {
+        if (active) setStatus('empty')
+        return
+      }
+
+      const resolvedUrl = resolveInterviewMediaUrl(playbackSource)
+      const isPublicHttpUrl =
+        /^https?:\/\//i.test(playbackSource) &&
+        resolvedUrl &&
+        !resolvedUrl.includes('/api/')
+
       try {
+        if (isPublicHttpUrl) {
+          if (!active) return
+          setObjectUrl(resolvedUrl)
+          setStatus('ready')
+          return
+        }
+
         const accessToken = getAccessToken?.()
         const blob = await fetchVideoInterviewRecording(
-          { sessionId, questionId, videoUrl },
+          { mediaUrl: playbackSource, videoUrl: playbackSource },
           accessToken,
           { signal: controller.signal }
         )
@@ -88,13 +226,23 @@ function AuthenticatedVideoPlayer({ sessionId, questionId, videoUrl, getAccessTo
         objectUrlRef.current = null
       }
     }
-  }, [sessionId, questionId, videoUrl, getAccessToken])
+  }, [playbackSource, getAccessToken])
 
   if (status === 'loading') {
     return (
       <div className="mock-history__video mock-history__video--loading">
         <div className="spinner" />
         <p>녹화 영상을 불러오는 중...</p>
+      </div>
+    )
+  }
+
+  if (status === 'empty') {
+    return (
+      <div className="mock-history__video mock-history__video--error">
+        <span className="mock-history__video-error-icon">🎬</span>
+        <p>녹화 영상 URL이 없습니다.</p>
+        <span className="mock-history__video-error-hint">상세 조회 응답의 mediaUrl을 확인해 주세요.</span>
       </div>
     )
   }
@@ -165,6 +313,9 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
       }
       const list = await getVideoInterviewHistories(accessToken, { signal })
       setApiHistories(list)
+
+      const enriched = await enrichSessionsWithQuestionPreviews(list, accessToken, signal)
+      if (!signal?.aborted) setApiHistories(enriched)
     } catch (error) {
       if (error?.name === 'AbortError') return
       setApiHistories([])
@@ -323,13 +474,15 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
         ) : (
           <div className="coach__history-list">
             {paginatedHistories.map((item) => {
-              const preview =
-                item.questionsPreview?.[0] ||
-                item.questions?.[0]?.question ||
-                item.summary ||
-                '모의 면접 세션'
+              const questionTitle = getSessionQuestionTitle(item)
               const questionCount =
                 item.questionCount || item.questions?.length || 0
+              const metaLabel =
+                questionCount > 1
+                  ? `${questionCount}문항`
+                  : questionCount === 1
+                    ? '1문항'
+                    : '문항 정보 없음'
 
               return (
                 <button
@@ -347,11 +500,12 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
                           {formatSessionDate(item.date)}
                         </span>
                       </div>
-                      <p className="coach__history-question">{preview}</p>
-                      <p className="mock-history__meta">
-                        {questionCount > 0 ? `${questionCount}문항` : '문항 정보 없음'}
-                        {item.summary ? ` · ${item.summary.slice(0, 48)}${item.summary.length > 48 ? '…' : ''}` : ''}
+                      <p className="coach__history-question">
+                        {questionTitle || metaLabel}
                       </p>
+                      {questionTitle ? (
+                        <p className="mock-history__meta">{metaLabel}</p>
+                      ) : null}
                     </div>
                     <div
                       className="coach__history-score"
@@ -362,7 +516,11 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
                       }}
                     >
                       <span className="coach__history-score-value">
-                        {typeof item.overallScore === 'number' ? item.overallScore : '-'}
+                        {typeof item.overallScore === 'number'
+                          ? item.overallScore
+                          : item.status === 'IN_PROGRESS'
+                            ? '—'
+                            : '-'}
                       </span>
                       <span className="coach__history-score-label">점</span>
                     </div>
@@ -373,7 +531,7 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
           </div>
         )}
 
-        <div className="coach__pagination">
+        <div className="coach__pagination mock-history__pagination">
           {(() => {
             const maxVisible = isMobile ? 3 : 5
             const currentGroup = Math.floor((currentPage - 1) / maxVisible)
@@ -467,7 +625,10 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
                   <span className="coach__modal-score-label">점</span>
                 </div>
                 <p className="mock-history__modal-summary-text">
-                  {(sessionDetail ?? selectedSession).summary || '모의 면접 피드백 요약'}
+                  {(sessionDetail ?? selectedSession).summary ||
+                    ((sessionDetail ?? selectedSession).status === 'IN_PROGRESS'
+                      ? '면접이 진행 중입니다. 완료 후 종합 피드백이 표시됩니다.'
+                      : '모의 면접 피드백 요약')}
                 </p>
               </div>
 
@@ -508,20 +669,15 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
                       </div>
 
                       <AuthenticatedVideoPlayer
-                        sessionId={selectedSession.sessionId}
-                        questionId={activeQuestion.questionId}
+                        mediaUrl={activeQuestion.mediaUrl}
                         videoUrl={activeQuestion.videoUrl}
                         getAccessToken={getAccessToken}
                       />
 
-                      {typeof activeQuestion.score === 'number' ? (
-                        <p className="mock-history__question-score">
-                          이 질문 점수:{' '}
-                          <strong style={{ color: getScoreColor(activeQuestion.score) }}>
-                            {activeQuestion.score}점
-                          </strong>
-                        </p>
-                      ) : null}
+                      <QuestionFeedbackPanel
+                        question={activeQuestion}
+                        getScoreColor={getScoreColor}
+                      />
                     </div>
                   ) : (
                     <div className="mock-history__video mock-history__video--error">
