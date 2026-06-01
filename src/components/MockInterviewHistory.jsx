@@ -312,8 +312,6 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
         return
       }
       const list = await getVideoInterviewHistories(accessToken, { signal })
-      setApiHistories(list)
-
       const enriched = await enrichSessionsWithQuestionPreviews(list, accessToken, signal)
       if (!signal?.aborted) setApiHistories(enriched)
     } catch (error) {
@@ -501,9 +499,9 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
                         </span>
                       </div>
                       <p className="coach__history-question">
-                        {questionTitle || metaLabel}
+                        {questionTitle || '질문 내용을 불러오지 못했습니다'}
                       </p>
-                      {questionTitle ? (
+                      {questionTitle && questionCount > 1 ? (
                         <p className="mock-history__meta">{metaLabel}</p>
                       ) : null}
                     </div>
