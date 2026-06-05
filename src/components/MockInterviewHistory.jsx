@@ -270,7 +270,7 @@ function AuthenticatedVideoPlayer({ mediaUrl, videoUrl, getAccessToken }) {
   )
 }
 
-export default function MockInterviewHistory({ isMobile, onStartMockInterview }) {
+export default function MockInterviewHistory({ isMobile, onStartMockInterview, onStartRetake }) {
   const { mockInterviewHistory, getAccessToken } = useAppState()
   const [apiHistories, setApiHistories] = useState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -282,6 +282,8 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
   const [isDetailLoading, setIsDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0)
+  const [loadingSessionIds, setLoadingSessionIds] = useState(() => new Set())
+  const [retakeError, setRetakeError] = useState('')
 
   const mergedHistories = useMemo(
     () => mergeMockHistories(apiHistories, mockInterviewHistory || []),
@@ -404,6 +406,104 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
     setCurrentPage(1)
   }
 
+  const ensureSessionQuestions = useCallback(
+    async (session) => {
+      if (!session?.sessionId) return session
+      if (session.questions?.length) return session
+
+      const accessToken = getAccessToken?.()
+      if (!accessToken) return session
+
+      const sessionId = String(session.sessionId)
+      setLoadingSessionIds((prev) => new Set(prev).add(sessionId))
+
+      try {
+        const detail = await getVideoInterviewSessionDetail(sessionId, accessToken)
+        if (!detail?.questions?.length) return session
+
+        const enriched = {
+          ...session,
+          questions: detail.questions,
+          questionCount: detail.questionCount || detail.questions.length,
+          questionsPreview:
+            detail.questions?.map((q) => q.question).filter(Boolean) ??
+            session.questionsPreview ??
+            [],
+        }
+
+        setApiHistories((prev) =>
+          prev.map((item) =>
+            String(item.sessionId) === sessionId ? { ...item, ...enriched } : item
+          )
+        )
+        return enriched
+      } catch {
+        return session
+      } finally {
+        setLoadingSessionIds((prev) => {
+          const next = new Set(prev)
+          next.delete(sessionId)
+          return next
+        })
+      }
+    },
+    [getAccessToken]
+  )
+
+  useEffect(() => {
+    if (!paginatedHistories.length) return undefined
+
+    const controller = new AbortController()
+    void Promise.all(
+      paginatedHistories
+        .filter((session) => !session.questions?.length)
+        .map((session) => ensureSessionQuestions(session))
+    )
+
+    return () => controller.abort()
+  }, [paginatedHistories, ensureSessionQuestions])
+
+  const handleOpenSessionDetail = useCallback((session, questionIndex = 0) => {
+    setSelectedSession(session)
+    setActiveQuestionIndex(questionIndex)
+  }, [])
+
+  const handleStartQuestionRetake = useCallback(
+    async (session, question) => {
+      setRetakeError('')
+      if (!onStartRetake) {
+        setRetakeError('재답변을 시작할 수 없습니다.')
+        return
+      }
+      if (session?.status === 'IN_PROGRESS') {
+        setRetakeError('진행 중인 면접은 재답변할 수 없습니다.')
+        return
+      }
+
+      let resolvedSession = session
+      if (!question?.questionId) {
+        resolvedSession = await ensureSessionQuestions(session)
+        const matched =
+          resolvedSession?.questions?.find(
+            (q) => (q.question || '').trim() === (question?.question || '').trim()
+          ) ?? resolvedSession?.questions?.[0]
+        question = matched ?? question
+      }
+
+      if (!question?.questionId) {
+        setRetakeError('질문 ID를 찾을 수 없어 재답변을 시작할 수 없습니다.')
+        return
+      }
+
+      onStartRetake({
+        sessionId: resolvedSession.sessionId,
+        questionId: question.questionId,
+        questionText: question.question || '',
+      })
+    },
+    [onStartRetake, ensureSessionQuestions]
+  )
+
   const activeQuestion = sessionDetail?.questions?.[activeQuestionIndex] ?? null
 
   if (isLoading && mergedHistories.length === 0) {
@@ -436,6 +536,12 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
         </div>
       ) : null}
 
+      {retakeError ? (
+        <div className="coach__error mock-history__banner-error">
+          <span>⚠️</span> {retakeError}
+        </div>
+      ) : null}
+
       <div className="coach__search">
         <div className="coach__search-input-wrapper">
           <span className="coach__search-icon">🔍</span>
@@ -462,6 +568,8 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
         <span className="coach__search-count">총 {filteredHistories.length}개의 기록</span>
       </div>
 
+      <p className="mock-history__retake-note">재답변 점수는 리워드에 반영되지 않습니다.</p>
+
       <div className="coach__history-card card mock-history__list-card">
         {filteredHistories.length === 0 ? (
           <div className="coach__history-empty">
@@ -470,43 +578,30 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
             <p>다른 키워드로 검색해보세요</p>
           </div>
         ) : (
-          <div className="coach__history-list">
+          <div className="coach__history-list mock-history__session-list">
             {paginatedHistories.map((item) => {
-              const questionTitle = getSessionQuestionTitle(item)
-              const questionCount =
-                item.questionCount || item.questions?.length || 0
-              const metaLabel =
-                questionCount > 1
-                  ? `${questionCount}문항`
-                  : questionCount === 1
-                    ? '1문항'
-                    : '문항 정보 없음'
+              const isSessionLoading = loadingSessionIds.has(String(item.sessionId))
+              const questionBlocks =
+                item.questions?.length > 0
+                  ? item.questions
+                  : [
+                      {
+                        questionId: null,
+                        question: getSessionQuestionTitle(item) || '질문 내용을 불러오지 못했습니다',
+                        score: null,
+                        index: 1,
+                      },
+                    ]
 
               return (
-                <button
-                  key={item.sessionId}
-                  type="button"
-                  className="coach__history-item mock-history__item"
-                  onClick={() => setSelectedSession(item)}
-                >
-                  <div className="coach__history-content">
-                    <div className="coach__history-main">
-                      <div className="coach__history-header">
-                        <span className="badge mock-history__badge">모의 면접</span>
-                        <span className="mock-history__video-chip">🎬 녹화</span>
-                        <span className="coach__history-date">
-                          {formatSessionDate(item.date)}
-                        </span>
-                      </div>
-                      <p className="coach__history-question">
-                        {questionTitle || '질문 내용을 불러오지 못했습니다'}
-                      </p>
-                      {questionTitle && questionCount > 1 ? (
-                        <p className="mock-history__meta">{metaLabel}</p>
-                      ) : null}
+                <div key={item.sessionId} className="mock-history__session-card">
+                  <div className="mock-history__session-card-header">
+                    <div className="mock-history__session-card-meta">
+                      <span className="badge mock-history__badge">모의 면접</span>
+                      <span className="coach__history-date">{formatSessionDate(item.date)}</span>
                     </div>
                     <div
-                      className="coach__history-score"
+                      className="coach__history-score mock-history__session-score"
                       style={{
                         '--score-color': getScoreColor(
                           typeof item.overallScore === 'number' ? item.overallScore : 0
@@ -523,7 +618,36 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview })
                       <span className="coach__history-score-label">점</span>
                     </div>
                   </div>
-                </button>
+
+                  <div className="mock-history__question-blocks">
+                    {questionBlocks.map((question, idx) => (
+                      <div key={question.questionId ?? `q-${idx}`} className="mock-history__question-block">
+                        <button
+                          type="button"
+                          className="mock-history__question-block-main"
+                          onClick={() => handleOpenSessionDetail(item, idx)}
+                        >
+                          <span className="badge">Q{question.index ?? idx + 1}</span>
+                          <p className="mock-history__question-block-text">
+                            {question.question || '질문 내용 없음'}
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn--secondary btn--sm mock-history__retake-btn"
+                          disabled={
+                            isSessionLoading ||
+                            item.status === 'IN_PROGRESS' ||
+                            !onStartRetake
+                          }
+                          onClick={() => void handleStartQuestionRetake(item, question)}
+                        >
+                          {isSessionLoading ? '불러오는 중…' : '다시 답변하기'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )
             })}
           </div>

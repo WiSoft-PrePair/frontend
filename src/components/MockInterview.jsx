@@ -320,7 +320,7 @@ function QuestionFeedbackSection({ q, ordinal, getScoreColor }) {
   )
 }
 
-export default function MockInterview() {
+export default function MockInterview({ historyRetakeRequest, onHistoryRetakeConsumed }) {
   const { getAccessToken, recordMockInterviewSession } = useAppState()
   const [phase, setPhase] = useState('ready') // ready | loading | interview | analyzing | feedback
   const [isRetakeMode, setIsRetakeMode] = useState(false)
@@ -1314,6 +1314,79 @@ export default function MockInterview() {
     setSelectedRetakeIndexes(new Set(sortedIndexes))
     void startRetakeQueue(sortedIndexes)
   }, [answers, startRetakeQueue])
+
+  const startRetakeFromHistory = useCallback(
+    async ({ sessionId, questionId, questionText }) => {
+      if (!sessionId || questionId == null || questionId === '') {
+        throw new Error('재답변에 필요한 세션·질문 정보가 없습니다.')
+      }
+      if (isStartingRetake) return
+
+      setErrorMessage('')
+      setIsStartingRetake(true)
+
+      try {
+        initAudioForMobile()
+
+        const accessToken = getAccessToken?.()
+        const { sessionId: newSessionId } = await retryVideoInterviewQuestion(
+          sessionId,
+          String(questionId),
+          accessToken
+        )
+        const detail = await getVideoInterviewSessionDetail(newSessionId, accessToken)
+        const apiQuestion = detail?.questions?.[0]
+        const retakeQuestion = {
+          id: String(apiQuestion?.questionId ?? apiQuestion?.id ?? questionId),
+          text: apiQuestion?.question || questionText || '',
+          category: 'VIDEO',
+          sessionId: newSessionId,
+        }
+
+        setInterviewReport(null)
+        setBehaviorAnalysis(null)
+        setDisplayedOverallScore(0)
+        setVideoSessionId(newSessionId)
+        setSelectedQuestions([retakeQuestion])
+        setAnswers([])
+        answersSnapshotRef.current = []
+        retakeQueueRef.current = []
+        setRetakeQueueMeta({ current: 1, total: 1 })
+        setSelectedRetakeIndexes(new Set())
+        await beginRetakeInterview(0)
+      } catch (error) {
+        console.error('[MockInterview] startRetakeFromHistory error:', error)
+        setErrorMessage(error?.message || '재답변 준비에 실패했습니다.')
+        throw error
+      } finally {
+        setIsStartingRetake(false)
+      }
+    },
+    [
+      isStartingRetake,
+      initAudioForMobile,
+      getAccessToken,
+      beginRetakeInterview,
+    ]
+  )
+
+  const startRetakeFromHistoryRef = useRef(startRetakeFromHistory)
+  startRetakeFromHistoryRef.current = startRetakeFromHistory
+
+  useEffect(() => {
+    if (!historyRetakeRequest) return undefined
+
+    let active = true
+    void startRetakeFromHistoryRef.current(historyRetakeRequest)
+      .catch(() => {})
+      .finally(() => {
+        if (active) onHistoryRetakeConsumed?.()
+      })
+
+    return () => {
+      active = false
+    }
+  }, [historyRetakeRequest, onHistoryRetakeConsumed])
 
   const handleToggleRetakeSelection = useCallback((index) => {
     setSelectedRetakeIndexes((prev) => {

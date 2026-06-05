@@ -462,6 +462,7 @@ export function AppProvider({children}) {
       category: result.category,
       answer: result.answer,
       historyId: result.historyId,
+      questionId: result.questionId ?? null,
       // 기업 면접 관련 필드
       source: result.source,
       company: result.company,
