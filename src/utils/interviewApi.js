@@ -409,6 +409,43 @@ const VIDEO_STREAM_ENDPOINTS = (sessionId) => [
   `/interviews/questions/video-answers/${sessionId}/stream`,
 ]
 
+const RETAKE_CHILD_SESSIONS_STORAGE_KEY = 'prepair_retake_child_sessions'
+
+function loadRetakeChildSessionMap() {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(RETAKE_CHILD_SESSIONS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveRetakeChildSessionMap(map) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(RETAKE_CHILD_SESSIONS_STORAGE_KEY, JSON.stringify(map))
+}
+
+/** 재답변 녹화용 임시 세션 ID — 원본 기록과 별도로 목록에 노출하지 않음 */
+export function registerRetakeChildSession(childSessionId, parentSessionId) {
+  if (!childSessionId || !parentSessionId) return
+  if (String(childSessionId) === String(parentSessionId)) return
+  const map = loadRetakeChildSessionMap()
+  map[String(childSessionId)] = String(parentSessionId)
+  saveRetakeChildSessionMap(map)
+}
+
+export function isRetakeChildSession(sessionId) {
+  if (sessionId == null || sessionId === '') return false
+  return Object.prototype.hasOwnProperty.call(loadRetakeChildSessionMap(), String(sessionId))
+}
+
+export function filterRetakeChildSessions(sessions) {
+  if (!Array.isArray(sessions)) return []
+  return sessions.filter((session) => !isRetakeChildSession(session?.sessionId))
+}
+
 /** 모의 면접 기록 — 세션 목록·상세 (면접 업로드 `video-answers` 와 분리) */
 const INTERVIEW_SESSION_LIST_ENDPOINT = '/interviews/sessions'
 const interviewSessionDetailEndpoint = (sessionId) => `/interviews/sessions/${sessionId}`
@@ -826,8 +863,72 @@ export function pickVideoRecordingUrl(item) {
   return null
 }
 
+/** 재답변 API path/body에 쓸 질문 ID 후보 (세션-질문 ID 우선) */
+export function collectRetakeQuestionIdCandidates(item) {
+  if (item == null) return []
+  if (typeof item === 'string' || typeof item === 'number') {
+    const id = String(item).trim()
+    return id ? [id] : []
+  }
+
+  const values = [
+    item.sessionQuestionId,
+    item.session_question_id,
+    item.questionId,
+    item.question_id,
+    item.id,
+    ...(Array.isArray(item.retakeQuestionIdCandidates) ? item.retakeQuestionIdCandidates : []),
+  ]
+
+  const seen = new Set()
+  const result = []
+  for (const value of values) {
+    if (value == null || value === '') continue
+    const key = String(value)
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(key)
+    }
+  }
+  return result
+}
+
+/** 상세 조회 질문 목록에서 재답변 대상 질문 매칭 */
+export function matchQuestionForRetake(detailQuestions, hint, questionIndex = 0) {
+  if (!Array.isArray(detailQuestions) || !detailQuestions.length) return hint ?? null
+
+  const hintIds = collectRetakeQuestionIdCandidates(hint)
+  if (hintIds.length) {
+    for (const id of hintIds) {
+      const found = detailQuestions.find((q) => collectRetakeQuestionIdCandidates(q).includes(id))
+      if (found) return found
+    }
+  }
+
+  const hintText = (hint?.question || hint?.text || '').trim()
+  if (hintText) {
+    const byText = detailQuestions.find(
+      (q) => (q.question || q.text || '').trim() === hintText
+    )
+    if (byText) return byText
+  }
+
+  if (questionIndex >= 0 && questionIndex < detailQuestions.length) {
+    return detailQuestions[questionIndex]
+  }
+
+  return hint ?? null
+}
+
 function normalizeVideoHistoryQuestion(item, idx, sessionId) {
-  const questionId = item?.questionId ?? item?.question_id ?? item?.id ?? null
+  const retakeQuestionIdCandidates = collectRetakeQuestionIdCandidates(item)
+  const questionId =
+    item?.questionId ??
+    item?.question_id ??
+    item?.sessionQuestionId ??
+    item?.session_question_id ??
+    item?.id ??
+    null
   const speechParsed =
     parseStructuredInterviewFeedback(item?.sttFeedback) ??
     parseStructuredInterviewFeedback(item?.speechFeedback) ??
@@ -840,6 +941,8 @@ function normalizeVideoHistoryQuestion(item, idx, sessionId) {
   return {
     index: idx + 1,
     questionId,
+    retakeQuestionId: retakeQuestionIdCandidates[0] ?? questionId,
+    retakeQuestionIdCandidates,
     question: item?.question ?? item?.questionText ?? item?.text ?? '',
     score:
       toNumericInterviewScore(item?.combinedScore) ??
@@ -1012,10 +1115,12 @@ export function normalizeVideoInterviewHistoryList(response) {
     list = groupFlatVideoAnswersBySession(list)
   }
 
-  return list
-    .map(normalizeVideoHistorySessionItem)
-    .filter(Boolean)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  return filterRetakeChildSessions(
+    list
+      .map(normalizeVideoHistorySessionItem)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  )
 }
 
 /** 화상 면접 기록 목록 조회 — GET `/interviews/sessions` */
@@ -1029,6 +1134,12 @@ export async function getVideoInterviewHistories(accessToken, { signal } = {}) {
   if (!response.ok) {
     if ([404, 405].includes(response.status)) {
       return []
+    }
+    if (response.status === 401) {
+      const error = new Error('로그인이 만료되었습니다. 다시 로그인해주세요.')
+      error.statusCode = 401
+      error.isAuthError = true
+      throw error
     }
     const data = await handleResponse(response)
     return normalizeVideoInterviewHistoryList(data)
@@ -1046,7 +1157,7 @@ function extractRetrySessionId(payload) {
   return sessionId != null && sessionId !== '' ? String(sessionId) : null
 }
 
-/** 재답변 시작 응답(202)에서 새 세션 ID 추출 */
+/** 재답변 시작 응답(201/202)에서 새 세션 ID·질문 ID 추출 */
 export async function handleRetryStartResponse(response) {
   const rawText = await response.text()
   let parsed = {}
@@ -1057,27 +1168,40 @@ export async function handleRetryStartResponse(response) {
   }
 
   const envelopeStatus = parsed?.statusCode ?? response.status
-  const isAccepted = response.status === 202 || envelopeStatus === 202
+  const isAccepted =
+    [201, 202].includes(response.status) || [201, 202].includes(envelopeStatus)
 
   if (isAccepted) {
     const sessionId = extractRetrySessionId(parsed)
     if (!sessionId) {
       throw new Error('새 면접 세션 ID를 받지 못했습니다.')
     }
+    const data = parsed?.data ?? parsed?.result ?? parsed
+    const questionIds = Array.isArray(data?.questionIds)
+      ? data.questionIds.map((id) => String(id))
+      : Array.isArray(data?.question_ids)
+        ? data.question_ids.map((id) => String(id))
+        : []
     return {
       sessionId,
+      questionIds,
       message: typeof parsed?.message === 'string' ? parsed.message : '',
-      statusCode: 202,
+      statusCode: envelopeStatus || response.status,
     }
   }
 
   if (!response.ok) {
     const fallbackMessage =
-      typeof rawText === 'string' && rawText.trim()
-        ? rawText.trim().slice(0, 300)
-        : '재답변 세션을 시작하지 못했습니다.'
+      response.status === 401
+        ? '로그인이 만료되었습니다. 다시 로그인해주세요.'
+        : response.status === 404
+          ? '해당 질문을 찾을 수 없습니다. 기록을 새로고침 후 다시 시도해주세요.'
+          : typeof rawText === 'string' && rawText.trim()
+            ? rawText.trim().slice(0, 300)
+            : '재답변 세션을 시작하지 못했습니다.'
     const error = new Error(pickApiErrorMessage(parsed) || fallbackMessage)
     error.statusCode = response.status
+    error.isAuthError = response.status === 401
     error.details = parsed
     throw error
   }
@@ -1094,7 +1218,7 @@ export async function handleRetryStartResponse(response) {
   throw new Error('재답변 세션을 시작하지 못했습니다.')
 }
 
-/** 화상 면접 단건 재답변 시작 — POST `.../sessions/{sessionId}/questions/{questionId}` → 202 + 새 sessionId */
+/** 화상 면접 단건 재답변 시작 — POST `.../sessions/{sessionId}/questions/{questionId}` → 201/202 + 새 sessionId */
 export async function retryVideoInterviewQuestion(
   sessionId,
   questionId,
@@ -1112,11 +1236,52 @@ export async function retryVideoInterviewQuestion(
     `${API_BASE}${interviewSessionQuestionEndpoint(sessionId, questionId)}`,
     {
       method: 'POST',
-      headers: buildAuthHeaders(accessToken, { Accept: 'application/json' }),
+      headers: buildHeaders(accessToken, { Accept: 'application/json' }),
+      body: JSON.stringify({}),
       signal,
     }
   )
   return handleRetryStartResponse(response)
+}
+
+/** 단건·다건 재답변 API를 순차 시도 (ID 후보 + 404 시 다건 폴백) */
+export async function startVideoInterviewRetake(
+  sessionId,
+  questionRef,
+  accessToken,
+  { signal } = {}
+) {
+  const candidates = collectRetakeQuestionIdCandidates(questionRef)
+  if (!candidates.length) {
+    throw new Error('질문 ID가 필요합니다.')
+  }
+
+  let lastNotFoundError = null
+
+  for (const questionId of candidates) {
+    try {
+      return await retryVideoInterviewQuestion(sessionId, questionId, accessToken, { signal })
+    } catch (error) {
+      if (error?.statusCode === 404) {
+        lastNotFoundError = error
+        continue
+      }
+      throw error
+    }
+  }
+
+  try {
+    return await retryVideoInterviewQuestions(sessionId, candidates, accessToken, { signal })
+  } catch (error) {
+    if (error?.statusCode === 404 || lastNotFoundError) {
+      const notFound = new Error(
+        '해당 질문을 찾을 수 없습니다. 기록을 새로고침 후 다시 시도해주세요.'
+      )
+      notFound.statusCode = 404
+      throw notFound
+    }
+    throw error
+  }
 }
 
 /** 화상 면접 다건 재답변 시작 — POST `/interviews/sessions/{sessionId}` + questionIds → 202 + 새 sessionId */
@@ -1143,6 +1308,24 @@ export async function retryVideoInterviewQuestions(
     signal,
   })
   return handleRetryStartResponse(response)
+}
+
+/** 재답변 직후 세션 상세가 비어 있을 수 있어 짧게 폴링한다 */
+export async function loadRetakeSessionDetail(
+  sessionId,
+  accessToken,
+  { signal, maxAttempts = 8, intervalMs = 400 } = {}
+) {
+  let lastDetail = null
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const detail = await getVideoInterviewSessionDetail(sessionId, accessToken, { signal })
+    lastDetail = detail
+    if (detail?.questions?.length) return detail
+    if (attempt < maxAttempts - 1) {
+      await sleep(intervalMs, signal)
+    }
+  }
+  return lastDetail
 }
 
 /** 화상 면접 세션 상세(피드백·질문·영상 URL) 조회 */

@@ -6,6 +6,10 @@ import {
   PRO_PLANS,
 } from '../data/appConstants'
 import * as memberApi from '../utils/memberApi'
+import {
+  filterRetakeChildSessions,
+  isRetakeChildSession,
+} from '../utils/interviewApi'
 
 const AppStateContext = createContext(null)
 
@@ -30,7 +34,7 @@ function loadMockInterviewHistory(userId) {
   try {
     const saved = localStorage.getItem(getMockHistoryStorageKey(userId))
     const parsed = saved ? JSON.parse(saved) : []
-    return Array.isArray(parsed) ? parsed : []
+    return filterRetakeChildSessions(Array.isArray(parsed) ? parsed : [])
   } catch {
     return []
   }
@@ -463,6 +467,9 @@ export function AppProvider({children}) {
       answer: result.answer,
       historyId: result.historyId,
       questionId: result.questionId ?? null,
+      strengths: result.strengths ?? [],
+      improvements: result.improvements ?? [],
+      recommendations: result.recommendations ?? [],
       // 기업 면접 관련 필드
       source: result.source,
       company: result.company,
@@ -493,11 +500,183 @@ export function AppProvider({children}) {
     return {earnedPoints, isFirstToday}
   }, [scoreHistory, companyHistory])
 
+  const updateInterviewHistoryEntry = useCallback((historyId, patch) => {
+    if (historyId == null) return
+
+    const applyPatch = (entry) => {
+      const entryId = entry.historyId ?? entry.id
+      if (String(entryId) !== String(historyId)) return entry
+      return {
+        ...entry,
+        ...patch,
+        date: patch.date ?? new Date().toISOString(),
+      }
+    }
+
+    setScoreHistory((prev) => prev.map(applyPatch))
+    setCompanyHistory((prev) => prev.map(applyPatch))
+  }, [])
+
+  const updateMockInterviewSessionAfterRetake = useCallback(
+    ({
+      sourceSessionId,
+      sourceQuestionId,
+      questionPatch,
+      overallScore,
+      summary,
+      questionText,
+    }) => {
+      if (!sourceSessionId || sourceQuestionId == null || sourceQuestionId === '') return
+
+      setMockInterviewHistory((prev) => {
+        const cleanedPrev = filterRetakeChildSessions(prev)
+        const updatedAt = new Date().toISOString()
+        const applyQuestionPatch = (questions) => {
+          const list = Array.isArray(questions) ? [...questions] : []
+          let targetIndex = list.findIndex(
+            (q) => String(q.questionId) === String(sourceQuestionId)
+          )
+          if (targetIndex === -1 && list.length === 1) targetIndex = 0
+          if (targetIndex === -1) {
+            list.push({
+              questionId: sourceQuestionId,
+              question: questionText || '',
+              index: 1,
+              ...questionPatch,
+            })
+            return list
+          }
+          list[targetIndex] = { ...list[targetIndex], ...questionPatch }
+          return list
+        }
+
+        const hasSession = cleanedPrev.some(
+          (session) => String(session.sessionId) === String(sourceSessionId)
+        )
+
+        const next = hasSession
+          ? cleanedPrev.map((session) => {
+              if (String(session.sessionId) !== String(sourceSessionId)) return session
+              const questions = applyQuestionPatch(session.questions)
+              const scores = questions
+                .map((q) => q.score)
+                .filter((score) => typeof score === 'number')
+              const computedOverall =
+                overallScore ??
+                (scores.length
+                  ? Math.round(scores.reduce((acc, cur) => acc + cur, 0) / scores.length)
+                  : session.overallScore)
+
+              return {
+                ...session,
+                questions,
+                overallScore: computedOverall,
+                summary: summary || session.summary,
+                date: updatedAt,
+                source: session.source || 'local',
+              }
+            })
+          : [
+              {
+                sessionId: String(sourceSessionId),
+                status: null,
+                date: updatedAt,
+                overallScore: overallScore ?? questionPatch?.score ?? null,
+                summary: summary || '',
+                questionCount: 1,
+                questionsPreview: questionText ? [questionText] : [],
+                questions: applyQuestionPatch([]),
+                source: 'local',
+              },
+              ...cleanedPrev,
+            ].slice(0, 50)
+
+        const filteredNext = filterRetakeChildSessions(next)
+        if (user?.id) {
+          localStorage.setItem(getMockHistoryStorageKey(user.id), JSON.stringify(filteredNext))
+        }
+        return filteredNext
+      })
+    },
+    [user?.id]
+  )
+
+  const syncMockInterviewHistories = useCallback((sessions) => {
+    const filteredSessions = filterRetakeChildSessions(sessions)
+    if (!Array.isArray(filteredSessions) || filteredSessions.length === 0) return
+
+    setMockInterviewHistory((prev) => {
+      const map = new Map()
+      for (const item of filterRetakeChildSessions(prev)) {
+        if (item?.sessionId) map.set(String(item.sessionId), item)
+      }
+
+      for (const session of filteredSessions) {
+        if (!session?.sessionId) continue
+        const key = String(session.sessionId)
+        const existing = map.get(key)
+        const existingIsNewer =
+          existing?.date &&
+          session.date &&
+          new Date(existing.date).getTime() >= new Date(session.date).getTime()
+        const entry = {
+          sessionId: key,
+          status: session.status ?? existing?.status ?? null,
+          date: existingIsNewer
+            ? existing.date
+            : session.date || existing?.date || new Date().toISOString(),
+          overallScore: existingIsNewer
+            ? existing.overallScore
+            : session.overallScore !== undefined
+              ? session.overallScore
+              : (existing?.overallScore ?? null),
+          summary: existingIsNewer
+            ? existing.summary || session.summary || ''
+            : session.summary || existing?.summary || '',
+          questionCount: existingIsNewer
+            ? existing.questionCount ?? existing.questions?.length ?? 0
+            : session.questionCount ??
+              session.questions?.length ??
+              existing?.questionCount ??
+              0,
+          questionsPreview: existingIsNewer
+            ? existing.questionsPreview?.length
+              ? existing.questionsPreview
+              : session.questionsPreview || []
+            : session.questionsPreview?.length
+              ? session.questionsPreview
+              : existing?.questionsPreview || [],
+          questions: existingIsNewer
+            ? existing.questions?.length
+              ? existing.questions
+              : session.questions || []
+            : session.questions?.length
+              ? session.questions
+              : existing?.questions || [],
+          source: existing?.source || session.source || 'api',
+        }
+        map.set(key, existing ? { ...session, ...existing, ...entry } : entry)
+      }
+
+      const next = filterRetakeChildSessions(
+        Array.from(map.values())
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          .slice(0, 50)
+      )
+
+      if (user?.id) {
+        localStorage.setItem(getMockHistoryStorageKey(user.id), JSON.stringify(next))
+      }
+      return next
+    })
+  }, [user?.id])
+
   const recordMockInterviewSession = useCallback((session) => {
-    if (!session?.sessionId) return
+    if (!session?.sessionId || isRetakeChildSession(session.sessionId)) return
     setMockInterviewHistory((prev) => {
       const entry = {
         sessionId: String(session.sessionId),
+        status: session.status ?? null,
         date: session.date || new Date().toISOString(),
         overallScore: session.overallScore ?? null,
         summary: session.summary || '',
@@ -506,10 +685,10 @@ export function AppProvider({children}) {
         questions: session.questions || [],
         source: 'local',
       }
-      const next = [
+      const next = filterRetakeChildSessions([
         entry,
         ...prev.filter((item) => item.sessionId !== entry.sessionId),
-      ].slice(0, 50)
+      ]).slice(0, 50)
       if (user?.id) {
         localStorage.setItem(getMockHistoryStorageKey(user.id), JSON.stringify(next))
       }
@@ -631,6 +810,9 @@ export function AppProvider({children}) {
     deleteAccount,
     updateProfile,
     recordInterviewResult,
+    updateInterviewHistoryEntry,
+    updateMockInterviewSessionAfterRetake,
+    syncMockInterviewHistories,
     recordMockInterviewSession,
     deductPoints,
     redeemReward,

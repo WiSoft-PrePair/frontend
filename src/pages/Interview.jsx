@@ -11,7 +11,6 @@ import {
   getInterviewQuestions,
   submitTextInterviewAnswer,
 } from '../utils/interviewApi'
-import { generateFeedback } from '../utils/feedbackApi'
 import '../styles/pages/Interview.css'
 import '../styles/components/pro-upgrade.css'
 
@@ -291,6 +290,35 @@ function isUuid(value) {
   )
 }
 
+function getHistoryQuestionText(item) {
+  if (!item) return ''
+  return typeof item.question === 'object' ? item.question?.text ?? '' : item.question ?? ''
+}
+
+async function resolveTextQuestionIdForReanswer(item, accessToken) {
+  if (item?.questionId && isUuid(String(item.questionId))) {
+    return String(item.questionId)
+  }
+
+  const questionText = getHistoryQuestionText(item).trim()
+  if (!questionText) {
+    throw new Error('재답변에 필요한 질문 정보가 없습니다.')
+  }
+
+  const response = await getInterviewQuestions({ type: 'TEXT' }, accessToken)
+  const list = pickQuestionListPayload(response)
+  const matched = list.find((q) => {
+    const text = String(q?.question ?? q?.text ?? q?.content ?? '').trim()
+    return text === questionText
+  })
+  const resolvedId = matched?.id ?? matched?.questionId ?? matched?.question_id
+  if (resolvedId && isUuid(String(resolvedId))) {
+    return String(resolvedId)
+  }
+
+  throw new Error('재답변에 필요한 질문 정보를 찾을 수 없습니다.')
+}
+
 function toFeedbackList(value) {
   if (Array.isArray(value)) return value.filter(Boolean)
   if (!value) return []
@@ -347,7 +375,20 @@ function normalizeFeedbackResponse(response, question, answer) {
 }
 
 export default function CoachPage() {
-  const { user, recordInterviewResult, lastFeedback, scoreHistory, companyHistory, isPro, canUseMockInterview, canUseJobPost, useMockInterview, useJobPost, getAccessToken } = useAppState()
+  const {
+    user,
+    recordInterviewResult,
+    updateInterviewHistoryEntry,
+    lastFeedback,
+    scoreHistory,
+    companyHistory,
+    isPro,
+    canUseMockInterview,
+    canUseJobPost,
+    useMockInterview,
+    useJobPost,
+    getAccessToken,
+  } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()
@@ -375,6 +416,8 @@ export default function CoachPage() {
   const tabParam = searchParams.get('tab')
   const activeTab = VALID_TABS.includes(tabParam) ? tabParam : 'practice'
   const historyIdParam = searchParams.get('historyId')
+  const historySubParam = searchParams.get('historySub')
+  const VALID_HISTORY_SUBS = ['general', 'company', 'mock', 'summary']
 
   const setActiveTab = (tab) => {
     setSearchParams({ tab }, { replace: true })
@@ -394,7 +437,37 @@ export default function CoachPage() {
   }
 
   // History sub-tab: 'general', 'company', 'mock', or 'summary'
-  const [historySubTab, setHistorySubTab] = useState('general')
+  const [historySubTab, setHistorySubTab] = useState(() =>
+    VALID_HISTORY_SUBS.includes(historySubParam) ? historySubParam : 'general'
+  )
+
+  const effectiveHistorySubTab =
+    activeTab === 'history' &&
+    historySubParam &&
+    VALID_HISTORY_SUBS.includes(historySubParam)
+      ? historySubParam
+      : historySubTab
+
+  useEffect(() => {
+    if (
+      activeTab === 'history' &&
+      historySubParam &&
+      VALID_HISTORY_SUBS.includes(historySubParam) &&
+      historySubTab !== historySubParam
+    ) {
+      setHistorySubTab(historySubParam)
+    }
+  }, [activeTab, historySubParam, historySubTab])
+
+  const setHistorySubTabWithUrl = useCallback(
+    (subTab) => {
+      setHistorySubTab(subTab)
+      if (activeTab === 'history') {
+        setSearchParams({ tab: 'history', historySub: subTab }, { replace: true })
+      }
+    },
+    [activeTab, setSearchParams]
+  )
 
   // Mobile detection
   const isMobile = useMediaQuery('(max-width: 768px)')
@@ -408,8 +481,8 @@ export default function CoachPage() {
   const [selectedHistory, setSelectedHistory] = useState(null)
   const [isDetailOpen, setIsDetailOpen] = useState(false)
 
-  // History list re-answer (리워드 미적용)
-  const [reanswerTargetId, setReanswerTargetId] = useState(null)
+  // History re-answer modal (리워드 미적용)
+  const [reanswerModalItem, setReanswerModalItem] = useState(null)
   const [reanswerDraft, setReanswerDraft] = useState('')
   const [isSubmittingReanswer, setIsSubmittingReanswer] = useState(false)
   const [reanswerFeedback, setReanswerFeedback] = useState(null)
@@ -417,10 +490,14 @@ export default function CoachPage() {
 
   // 화상 면접 기록 → 재답변 요청
   const [historyRetakeRequest, setHistoryRetakeRequest] = useState(null)
+  const [mockHistoryRefreshKey, setMockHistoryRefreshKey] = useState(0)
+  const [mockHistorySeeds, setMockHistorySeeds] = useState([])
+
+  const isReanswerModalOpen = Boolean(reanswerModalItem)
 
   // 모달 열릴 때 body 스크롤 막기
   useEffect(() => {
-    if (isDetailOpen) {
+    if (isDetailOpen || isReanswerModalOpen) {
       document.documentElement.style.overflow = 'hidden'
       document.body.style.overflow = 'hidden'
     } else {
@@ -431,7 +508,7 @@ export default function CoachPage() {
       document.documentElement.style.overflow = ''
       document.body.style.overflow = ''
     }
-  }, [isDetailOpen])
+  }, [isDetailOpen, isReanswerModalOpen])
 
   // Job Post Analysis states
   const [jobPostUrl, setJobPostUrl] = useState('')
@@ -552,13 +629,18 @@ export default function CoachPage() {
   // ESC 키로 모달 닫기
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && isDetailOpen) {
+      if (e.key !== 'Escape') return
+      if (isReanswerModalOpen) {
+        handleCloseReanswerModal()
+        return
+      }
+      if (isDetailOpen) {
         handleCloseDetail()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isDetailOpen])
+  }, [isDetailOpen, isReanswerModalOpen])
 
   // Auto-resize textarea
   useEffect(() => {
@@ -626,26 +708,23 @@ export default function CoachPage() {
 
   const resolveHistoryItemId = (item) => item?.historyId ?? item?.id ?? null
 
-  const handleToggleHistoryReanswer = (item) => {
-    const itemId = resolveHistoryItemId(item)
-    if (!itemId) return
-
-    if (reanswerTargetId === itemId) {
-      setReanswerTargetId(null)
-      setReanswerDraft('')
-      setReanswerFeedback(null)
-      setReanswerError('')
-      return
-    }
-
-    setReanswerTargetId(itemId)
-    setReanswerDraft(item.answer || '')
+  const handleOpenHistoryReanswer = (item) => {
+    setReanswerModalItem(item)
+    setReanswerDraft('')
     setReanswerFeedback(null)
     setReanswerError('')
   }
 
-  const submitHistoryReanswer = async (item) => {
-    if (!reanswerDraft.trim()) return
+  const handleCloseReanswerModal = () => {
+    if (isSubmittingReanswer) return
+    setReanswerModalItem(null)
+    setReanswerDraft('')
+    setReanswerFeedback(null)
+    setReanswerError('')
+  }
+
+  const submitHistoryReanswer = async () => {
+    if (!reanswerModalItem || !reanswerDraft.trim()) return
 
     setIsSubmittingReanswer(true)
     setReanswerError('')
@@ -653,28 +732,19 @@ export default function CoachPage() {
 
     try {
       const accessToken = resolveAccessToken()
+      const questionId = await resolveTextQuestionIdForReanswer(reanswerModalItem, accessToken)
       const questionMeta = {
-        id: item.questionId,
-        text:
-          typeof item.question === 'object'
-            ? item.question?.text
-            : item.question,
-        category: item.category,
+        id: questionId,
+        text: getHistoryQuestionText(reanswerModalItem),
+        category: reanswerModalItem.category,
         source: 'api',
       }
 
-      let response
-      if (item.questionId && isUuid(String(item.questionId))) {
-        response = await submitTextInterviewAnswer(
-          item.questionId,
-          { answer: reanswerDraft.trim() },
-          accessToken
-        )
-      } else if (item.historyId) {
-        response = await generateFeedback(item.historyId, { answer: reanswerDraft.trim() })
-      } else {
-        throw new Error('재답변에 필요한 질문 정보가 없습니다.')
-      }
+      const response = await submitTextInterviewAnswer(
+        questionId,
+        { answer: reanswerDraft.trim() },
+        accessToken
+      )
 
       const feedbackData = normalizeFeedbackResponse(
         response,
@@ -682,6 +752,22 @@ export default function CoachPage() {
         reanswerDraft.trim()
       )
       setReanswerFeedback({ ...feedbackData, earnedPoints: 0 })
+
+      const historyId = resolveHistoryItemId(reanswerModalItem)
+      if (historyId != null) {
+        updateInterviewHistoryEntry(historyId, {
+          score: feedbackData.score,
+          breakdown: feedbackData.breakdown,
+          summary: feedbackData.summary,
+          answer: feedbackData.answer,
+          questionId: feedbackData.questionId,
+          strengths: feedbackData.strengths,
+          improvements: feedbackData.improvements,
+          recommendations: feedbackData.recommendations,
+          earnedPoints: 0,
+          isRetake: true,
+        })
+      }
     } catch (err) {
       setReanswerError(err?.message || '재답변 제출에 실패했습니다.')
     } finally {
@@ -689,21 +775,44 @@ export default function CoachPage() {
     }
   }
 
-  const handleStartVideoRetakeFromHistory = useCallback((retakeRequest) => {
-    setHistoryRetakeRequest(retakeRequest)
-    setActiveTab('mock')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }, [])
+  const handleStartVideoRetakeFromHistory = useCallback(
+    (retakeRequest) => {
+      setHistoryRetakeRequest(retakeRequest)
+      setSearchParams({ tab: 'mock' }, { replace: true })
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    },
+    [setSearchParams]
+  )
 
   const handleHistoryRetakeConsumed = useCallback(() => {
     setHistoryRetakeRequest(null)
   }, [])
 
+  const handleVideoRetakeComplete = useCallback(
+    ({ updatedSession } = {}) => {
+      setHistoryRetakeRequest(null)
+      if (updatedSession?.sessionId) {
+        setMockHistorySeeds((prev) => {
+          const map = new Map(prev.map((item) => [String(item.sessionId), item]))
+          map.set(String(updatedSession.sessionId), updatedSession)
+          return Array.from(map.values())
+        })
+      }
+      setHistorySubTab('mock')
+      setSearchParams({ tab: 'history', historySub: 'mock' }, { replace: true })
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      window.setTimeout(() => {
+        setMockHistoryRefreshKey((key) => key + 1)
+      }, 1500)
+    },
+    [setSearchParams]
+  )
+
   useEffect(() => {
-    if (reanswerTargetId == null || !reanswerTextareaRef.current) return
+    if (!isReanswerModalOpen || !reanswerTextareaRef.current) return
     reanswerTextareaRef.current.style.height = 'auto'
     reanswerTextareaRef.current.style.height = `${reanswerTextareaRef.current.scrollHeight}px`
-  }, [reanswerDraft, reanswerTargetId])
+  }, [reanswerDraft, isReanswerModalOpen])
 
   // Job Post Analysis handlers
   const handleAnalyzeJobPost = async () => {
@@ -911,7 +1020,7 @@ export default function CoachPage() {
               공고 분석
             </ProTab>
             <ProTab
-              isActive={activeTab === 'mock'}
+              isActive={activeTab === 'mock' || Boolean(historyRetakeRequest)}
               onClick={() => handleProTabClick('mock', 'mock')}
               feature="mock"
             >
@@ -1051,36 +1160,36 @@ export default function CoachPage() {
               )}
             </AnimatePresence>
           </div>
-        ) : activeTab === 'history' ? (
+        ) : activeTab === 'history' && !historyRetakeRequest ? (
           <div className="coach__history">
             {/* History Sub Tabs */}
             <div className="coach__history-subtabs">
               <button
-                className={`coach__history-subtab ${historySubTab === 'general' ? 'coach__history-subtab--active' : ''}`}
-                onClick={() => setHistorySubTab('general')}
+                className={`coach__history-subtab ${effectiveHistorySubTab === 'general' ? 'coach__history-subtab--active' : ''}`}
+                onClick={() => setHistorySubTabWithUrl('general')}
               >
                 일반 면접
               </button>
               <button
-                className={`coach__history-subtab ${historySubTab === 'company' ? 'coach__history-subtab--active' : ''}`}
-                onClick={() => setHistorySubTab('company')}
+                className={`coach__history-subtab ${effectiveHistorySubTab === 'company' ? 'coach__history-subtab--active' : ''}`}
+                onClick={() => setHistorySubTabWithUrl('company')}
               >
                 기업 면접
               </button>
               <button
-                className={`coach__history-subtab ${historySubTab === 'mock' ? 'coach__history-subtab--active' : ''}`}
-                onClick={() => setHistorySubTab('mock')}
+                className={`coach__history-subtab ${effectiveHistorySubTab === 'mock' ? 'coach__history-subtab--active' : ''}`}
+                onClick={() => setHistorySubTabWithUrl('mock')}
               >
                 모의 면접
               </button>
               <button
-                className={`coach__history-subtab coach__history-subtab--pro ${historySubTab === 'summary' ? 'coach__history-subtab--active' : ''}`}
+                className={`coach__history-subtab coach__history-subtab--pro ${effectiveHistorySubTab === 'summary' ? 'coach__history-subtab--active' : ''}`}
                 onClick={() => {
                   if (!isPro) {
                     setProModalFeature('all')
                     setShowProModal(true)
                   } else {
-                    setHistorySubTab('summary')
+                    setHistorySubTabWithUrl('summary')
                   }
                 }}
               >
@@ -1090,7 +1199,7 @@ export default function CoachPage() {
             </div>
 
             {/* 요약 분석 탭 */}
-            {historySubTab === 'summary' ? (
+            {effectiveHistorySubTab === 'summary' ? (
               <Motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1203,19 +1312,21 @@ export default function CoachPage() {
                   })()}
                 </div>
               </Motion.div>
-            ) : historySubTab === 'mock' ? (
+            ) : effectiveHistorySubTab === 'mock' ? (
               <MockInterviewHistory
                 isMobile={isMobile}
+                refreshKey={mockHistoryRefreshKey}
+                seedSessions={mockHistorySeeds}
                 onStartMockInterview={() => setActiveTab('mock')}
                 onStartRetake={handleStartVideoRetakeFromHistory}
               />
             ) : histories.length === 0 ? (
               <div className="coach__empty card">
                 <span className="coach__empty-icon">📝</span>
-                <h3>{historySubTab === 'company' ? '기업 면접 기록이 없습니다' : '연습 기록이 없습니다'}</h3>
-                <p>{historySubTab === 'company' ? '공고 분석에서 면접 연습을 시작해보세요!' : '첫 면접 연습을 시작해보세요!'}</p>
-                <button className="btn btn--primary" onClick={() => setActiveTab(historySubTab === 'company' ? 'jobpost' : 'practice')}>
-                  {historySubTab === 'company' ? '공고 분석하기' : '연습 시작하기'}
+                <h3>{effectiveHistorySubTab === 'company' ? '기업 면접 기록이 없습니다' : '연습 기록이 없습니다'}</h3>
+                <p>{effectiveHistorySubTab === 'company' ? '공고 분석에서 면접 연습을 시작해보세요!' : '첫 면접 연습을 시작해보세요!'}</p>
+                <button className="btn btn--primary" onClick={() => setActiveTab(effectiveHistorySubTab === 'company' ? 'jobpost' : 'practice')}>
+                  {effectiveHistorySubTab === 'company' ? '공고 분석하기' : '연습 시작하기'}
                 </button>
               </div>
             ) : (
@@ -1263,17 +1374,10 @@ export default function CoachPage() {
                     <div className="coach__history-list mock-history__session-list">
                       {paginatedHistories.map((item, idx) => {
                         const itemId = resolveHistoryItemId(item) ?? idx
-                        const isReanswering = reanswerTargetId === itemId
-                        const questionText =
-                          typeof item.question === 'object'
-                            ? item.question?.text
-                            : item.question
+                        const questionText = getHistoryQuestionText(item)
 
                         return (
-                          <div
-                            key={itemId}
-                            className={`mock-history__session-card${isReanswering ? ' mock-history__session-card--expanded' : ''}`}
-                          >
+                          <div key={itemId} className="mock-history__session-card">
                             <div className="mock-history__session-card-header">
                               <div className="mock-history__session-card-meta">
                                 <span className="badge">{item.category || '경험'}</span>
@@ -1299,103 +1403,29 @@ export default function CoachPage() {
 
                             <div className="mock-history__question-blocks">
                               <div className="mock-history__question-block">
-                                <button
-                                  type="button"
-                                  className="mock-history__question-block-main"
-                                  onClick={() => handleHistoryClick(item)}
-                                >
+                                <div className="mock-history__question-block-main">
                                   <span className="badge">Q1</span>
                                   <p className="mock-history__question-block-text">
                                     {questionText || '질문 내용 없음'}
                                   </p>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn--secondary btn--sm mock-history__retake-btn"
-                                  onClick={() => handleToggleHistoryReanswer(item)}
-                                >
-                                  {isReanswering ? '닫기' : '다시 답변하기'}
-                                </button>
-                              </div>
-
-                            {isReanswering ? (
-                              <div className="coach__history-reanswer mock-history__reanswer-panel">
-                                <textarea
-                                  ref={reanswerTextareaRef}
-                                  className="coach__textarea"
-                                  value={reanswerDraft}
-                                  onChange={(e) => setReanswerDraft(e.target.value)}
-                                  placeholder="답변을 다시 작성해보세요..."
-                                  rows={5}
-                                  disabled={isSubmittingReanswer}
-                                />
-                                {reanswerError ? (
-                                  <p className="coach__history-reanswer-error">⚠️ {reanswerError}</p>
-                                ) : null}
-                                <div className="coach__history-reanswer-actions">
+                                </div>
+                                <div className="mock-history__question-block-actions">
                                   <button
                                     type="button"
-                                    className="btn btn--primary btn--sm"
-                                    disabled={!reanswerDraft.trim() || isSubmittingReanswer}
-                                    onClick={() => void submitHistoryReanswer(item)}
+                                    className="btn btn--secondary btn--sm mock-history__detail-btn"
+                                    onClick={() => handleHistoryClick(item)}
                                   >
-                                    {isSubmittingReanswer ? (
-                                      <>
-                                        <span className="spinner spinner--sm" />
-                                        분석 중...
-                                      </>
-                                    ) : (
-                                      '재답변 제출'
-                                    )}
+                                    상세보기
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn--secondary btn--sm mock-history__retake-btn"
+                                    onClick={() => handleOpenHistoryReanswer(item)}
+                                  >
+                                    다시 답변하기
                                   </button>
                                 </div>
-
-                                {reanswerFeedback ? (
-                                  <div className="coach__history-reanswer-result">
-                                    <div className="coach__history-reanswer-score">
-                                      <div
-                                        className="coach__modal-score-circle coach__modal-score-circle--sm"
-                                        style={{
-                                          '--score-color': getScoreColor(reanswerFeedback.score),
-                                        }}
-                                      >
-                                        <span className="coach__modal-score-value">
-                                          {reanswerFeedback.score}
-                                        </span>
-                                        <span className="coach__modal-score-label">점</span>
-                                      </div>
-                                      <p>{reanswerFeedback.summary}</p>
-                                    </div>
-                                    <div className="coach__modal-feedback">
-                                      <div className="coach__modal-feedback-card coach__modal-feedback-card--strength">
-                                        <h5>💪 잘한 점</h5>
-                                        <ul>
-                                          {(reanswerFeedback.strengths || []).map((entry, entryIdx) => (
-                                            <li key={entryIdx}>{entry}</li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                      <div className="coach__modal-feedback-card coach__modal-feedback-card--improvement">
-                                        <h5>📈 개선할 점</h5>
-                                        <ul>
-                                          {(reanswerFeedback.improvements || []).map((entry, entryIdx) => (
-                                            <li key={entryIdx}>{entry}</li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                      <div className="coach__modal-feedback-card coach__modal-feedback-card--study">
-                                        <h5>📚 추천 학습</h5>
-                                        <ul>
-                                          {(reanswerFeedback.recommendations || []).map((entry, entryIdx) => (
-                                            <li key={entryIdx}>{entry}</li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : null}
                               </div>
-                            ) : null}
                             </div>
                           </div>
                         )
@@ -1451,8 +1481,11 @@ export default function CoachPage() {
               </>
             )}
           </div>
-        ) : activeTab === 'mock' ? (
-          <div className="coach__mock">
+        ) : activeTab === 'mock' || historyRetakeRequest ? (
+          <div
+            className={`coach__mock${activeTab !== 'mock' && !historyRetakeRequest ? ' coach__mock--hidden' : ''}`}
+            aria-hidden={activeTab !== 'mock' && !historyRetakeRequest}
+          >
             {/* Pro 안내 배너 */}
             {!isPro && (
               <div className="coach__pro-notice">
@@ -1478,6 +1511,7 @@ export default function CoachPage() {
             <MockInterview
               historyRetakeRequest={historyRetakeRequest}
               onHistoryRetakeConsumed={handleHistoryRetakeConsumed}
+              onVideoRetakeComplete={handleVideoRetakeComplete}
             />
           </div>
         ) : (
@@ -1971,6 +2005,143 @@ export default function CoachPage() {
             </Motion.div>
           </Motion.div>
         )}
+      </AnimatePresence>
+
+      {/* History Re-answer Modal */}
+      <AnimatePresence>
+        {reanswerModalItem ? (
+          <Motion.div
+            className="coach__modal-overlay coach__reanswer-modal-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleCloseReanswerModal}
+          >
+            <Motion.div
+              className="coach__modal coach__reanswer-modal"
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="coach__modal-header">
+                <div>
+                  <span className="badge">{reanswerModalItem.category || '경험'}</span>
+                  <span className="coach__modal-date">다시 답변하기</span>
+                </div>
+                <button
+                  type="button"
+                  className="coach__modal-close"
+                  onClick={handleCloseReanswerModal}
+                  disabled={isSubmittingReanswer}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p className="coach__reanswer-modal-note">
+                새 답변을 작성해 제출하세요. 재답변 점수는 리워드에 반영되지 않습니다.
+              </p>
+
+              {!reanswerFeedback ? (
+                <>
+                  <div className="coach__modal-question coach__reanswer-modal-question">
+                    <span className="coach__modal-question-label">질문</span>
+                    <p>{getHistoryQuestionText(reanswerModalItem) || '질문 내용 없음'}</p>
+                  </div>
+
+                  <div className="coach__answer coach__reanswer-modal-answer">
+                    <label className="coach__answer-label">새 답변</label>
+                    <textarea
+                      ref={reanswerTextareaRef}
+                      className="coach__textarea"
+                      placeholder="STAR 기법을 활용하여 새 답변을 작성해보세요.&#10;&#10;• Situation: 상황 설명&#10;• Task: 맡은 역할&#10;• Action: 구체적 행동&#10;• Result: 결과 및 배운점"
+                      value={reanswerDraft}
+                      onChange={(e) => setReanswerDraft(e.target.value)}
+                      rows={8}
+                      disabled={isSubmittingReanswer}
+                    />
+                    {reanswerError ? (
+                      <p className="coach__history-reanswer-error">⚠️ {reanswerError}</p>
+                    ) : null}
+                    <div className="coach__answer-footer">
+                      <span className="coach__char-count">{reanswerDraft.length}자</span>
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        disabled={!reanswerDraft.trim() || isSubmittingReanswer}
+                        onClick={() => void submitHistoryReanswer()}
+                      >
+                        {isSubmittingReanswer ? (
+                          <>
+                            <span className="spinner spinner--sm" />
+                            분석 중...
+                          </>
+                        ) : (
+                          '재답변 제출'
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="coach__modal-result coach__reanswer-modal-result">
+                    <div className="coach__modal-result-score">
+                      <div
+                        className="coach__modal-score-circle"
+                        style={{ '--score-color': getScoreColor(reanswerFeedback.score) }}
+                      >
+                        <span className="coach__modal-score-value">{reanswerFeedback.score}</span>
+                        <span className="coach__modal-score-label">점</span>
+                      </div>
+                      <div className="coach__modal-score-info">
+                        <p>{reanswerFeedback.summary}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="coach__modal-feedback">
+                    <div className="coach__modal-feedback-card coach__modal-feedback-card--strength">
+                      <h5>💪 잘한 점</h5>
+                      <ul>
+                        {(reanswerFeedback.strengths || []).map((entry, entryIdx) => (
+                          <li key={entryIdx}>{entry}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="coach__modal-feedback-card coach__modal-feedback-card--improvement">
+                      <h5>📈 개선할 점</h5>
+                      <ul>
+                        {(reanswerFeedback.improvements || []).map((entry, entryIdx) => (
+                          <li key={entryIdx}>{entry}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="coach__modal-feedback-card coach__modal-feedback-card--study">
+                      <h5>📚 추천 학습</h5>
+                      <ul>
+                        {(reanswerFeedback.recommendations || []).map((entry, entryIdx) => (
+                          <li key={entryIdx}>{entry}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="coach__modal-actions">
+                    <button
+                      type="button"
+                      className="btn btn--primary btn--block"
+                      onClick={handleCloseReanswerModal}
+                    >
+                      확인
+                    </button>
+                  </div>
+                </>
+              )}
+            </Motion.div>
+          </Motion.div>
+        ) : null}
       </AnimatePresence>
 
       {/* Pro Upgrade Modal */}

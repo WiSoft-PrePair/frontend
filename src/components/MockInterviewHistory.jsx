@@ -7,6 +7,11 @@ import {
   fetchVideoInterviewRecording,
   isInterviewFeedbackTripleEmpty,
   resolveInterviewMediaUrl,
+  collectRetakeQuestionIdCandidates,
+  filterRetakeChildSessions,
+  matchQuestionForRetake,
+  registerRetakeChildSession,
+  startVideoInterviewRetake,
 } from '../utils/interviewApi'
 
 const ITEMS_PER_PAGE = 5
@@ -146,20 +151,75 @@ function QuestionFeedbackPanel({ question, getScoreColor }) {
   )
 }
 
+function mergeApiHistoryLists(previousList, incomingList) {
+  const map = new Map()
+  for (const item of previousList) {
+    if (item?.sessionId) map.set(String(item.sessionId), item)
+  }
+  for (const item of incomingList) {
+    if (!item?.sessionId) continue
+    const key = String(item.sessionId)
+    const existing = map.get(key)
+    const existingIsNewer =
+      existing?.date &&
+      item.date &&
+      new Date(existing.date).getTime() >= new Date(item.date).getTime()
+    map.set(key, existing ? (existingIsNewer ? { ...item, ...existing } : { ...existing, ...item }) : item)
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  )
+}
+
 function mergeMockHistories(apiList, localList) {
   const map = new Map()
-  for (const item of localList) {
+  for (const item of filterRetakeChildSessions(localList)) {
     if (item?.sessionId) map.set(String(item.sessionId), { ...item, source: item.source || 'local' })
   }
   for (const item of apiList) {
     if (!item?.sessionId) continue
     const key = String(item.sessionId)
     const existing = map.get(key)
-    map.set(key, existing ? { ...existing, ...item, source: 'api' } : item)
+    // 로컬(재답변 반영 등)이 API보다 최신이면 로컬 값을 우선한다.
+    map.set(
+      key,
+      existing
+        ? {
+            ...item,
+            ...existing,
+            source: existing.source || item.source || 'api',
+          }
+        : { ...item, source: item.source || 'api' }
+    )
   }
   return Array.from(map.values()).sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
   )
+}
+
+function resolveAccessToken(getAccessToken) {
+  const tokenFromContext = getAccessToken?.()
+  if (tokenFromContext) return tokenFromContext
+  if (typeof window === 'undefined') return null
+  return (
+    window.sessionStorage.getItem('prepair_access_token') ||
+    window.localStorage.getItem('prepair_access_token') ||
+    null
+  )
+}
+
+function formatHistoryLoadError(error) {
+  if (error?.statusCode === 401 || error?.isAuthError) {
+    return '로그인이 만료되었습니다. 다시 로그인해주세요.'
+  }
+  return error?.message || '모의 면접 기록을 불러오지 못했습니다.'
+}
+
+/** 점수가 산출된 세션만 재답변 가능 (- / — 표시 세션 제외) */
+function canRetryMockSession(session) {
+  if (!session) return false
+  if (session.status === 'IN_PROGRESS') return false
+  return typeof session.overallScore === 'number'
 }
 
 function AuthenticatedVideoPlayer({ mediaUrl, videoUrl, getAccessToken }) {
@@ -270,8 +330,16 @@ function AuthenticatedVideoPlayer({ mediaUrl, videoUrl, getAccessToken }) {
   )
 }
 
-export default function MockInterviewHistory({ isMobile, onStartMockInterview, onStartRetake }) {
-  const { mockInterviewHistory, getAccessToken } = useAppState()
+export default function MockInterviewHistory({
+  isMobile,
+  onStartMockInterview,
+  onStartRetake,
+  refreshKey = 0,
+  seedSessions = [],
+}) {
+  const { mockInterviewHistory, getAccessToken, syncMockInterviewHistories } = useAppState()
+  const mockInterviewHistoryRef = useRef(mockInterviewHistory)
+  mockInterviewHistoryRef.current = mockInterviewHistory
   const [apiHistories, setApiHistories] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -284,11 +352,17 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview, o
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0)
   const [loadingSessionIds, setLoadingSessionIds] = useState(() => new Set())
   const [retakeError, setRetakeError] = useState('')
+  const [retakeLoadingKey, setRetakeLoadingKey] = useState(null)
 
   const mergedHistories = useMemo(
-    () => mergeMockHistories(apiHistories, mockInterviewHistory || []),
-    [apiHistories, mockInterviewHistory]
+    () => mergeMockHistories(apiHistories, [...(seedSessions || []), ...(mockInterviewHistory || [])]),
+    [apiHistories, mockInterviewHistory, seedSessions]
   )
+
+  useEffect(() => {
+    if (!seedSessions?.length) return
+    setApiHistories((prev) => mergeApiHistoryLists(prev, seedSessions))
+  }, [seedSessions])
 
   const filteredHistories = useMemo(() => {
     if (!searchQuery.trim()) return mergedHistories
@@ -308,31 +382,35 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview, o
     setIsLoading(true)
     setLoadError('')
     try {
-      const accessToken = getAccessToken?.()
+      const accessToken = resolveAccessToken(getAccessToken)
       if (!accessToken) {
-        setApiHistories([])
+        setLoadError('로그인이 필요합니다. 다시 로그인해주세요.')
         return
       }
       const list = await getVideoInterviewHistories(accessToken, { signal })
       const enriched = await enrichSessionsWithQuestionPreviews(list, accessToken, signal)
-      if (!signal?.aborted) setApiHistories(enriched)
+      if (signal?.aborted) return
+      setApiHistories((prev) => mergeApiHistoryLists(prev, enriched))
+      syncMockInterviewHistories(enriched)
     } catch (error) {
       if (error?.name === 'AbortError') return
-      setApiHistories([])
-      // 서버 목록 API 오류 시 로컬 기록이 있으면 에러 배너를 숨긴다.
-      if (!mockInterviewHistory?.length) {
-        setLoadError(error?.message || '모의 면접 기록을 불러오지 못했습니다.')
+      // API 실패 시에도 apiHistories·로컬 기록은 그대로 둔다 (점수 미산출 세션 유지).
+      const hasLocalHistory = mockInterviewHistoryRef.current?.length > 0
+      if (error?.statusCode === 401 || error?.isAuthError) {
+        setLoadError(formatHistoryLoadError(error))
+      } else if (!hasLocalHistory) {
+        setLoadError(formatHistoryLoadError(error))
       }
     } finally {
       if (!signal?.aborted) setIsLoading(false)
     }
-  }, [getAccessToken, mockInterviewHistory])
+  }, [getAccessToken, syncMockInterviewHistories])
 
   useEffect(() => {
     const controller = new AbortController()
     void loadHistories(controller.signal)
     return () => controller.abort()
-  }, [loadHistories])
+  }, [loadHistories, refreshKey])
 
   useEffect(() => {
     if (!selectedSession) {
@@ -349,7 +427,7 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview, o
 
     const loadDetail = async () => {
       try {
-        const accessToken = getAccessToken?.()
+        const accessToken = resolveAccessToken(getAccessToken)
         const detail = await getVideoInterviewSessionDetail(
           selectedSession.sessionId,
           accessToken,
@@ -411,7 +489,7 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview, o
       if (!session?.sessionId) return session
       if (session.questions?.length) return session
 
-      const accessToken = getAccessToken?.()
+      const accessToken = resolveAccessToken(getAccessToken)
       if (!accessToken) return session
 
       const sessionId = String(session.sessionId)
@@ -469,39 +547,77 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview, o
   }, [])
 
   const handleStartQuestionRetake = useCallback(
-    async (session, question) => {
+    async (session, question, questionIndex = 0) => {
       setRetakeError('')
       if (!onStartRetake) {
         setRetakeError('재답변을 시작할 수 없습니다.')
         return
       }
-      if (session?.status === 'IN_PROGRESS') {
-        setRetakeError('진행 중인 면접은 재답변할 수 없습니다.')
+      if (!canRetryMockSession(session)) {
+        setRetakeError('점수 산출이 완료된 기록만 다시 답변할 수 있습니다.')
         return
       }
 
-      let resolvedSession = session
-      if (!question?.questionId) {
-        resolvedSession = await ensureSessionQuestions(session)
-        const matched =
-          resolvedSession?.questions?.find(
-            (q) => (q.question || '').trim() === (question?.question || '').trim()
-          ) ?? resolvedSession?.questions?.[0]
-        question = matched ?? question
-      }
+      const loadingKey = `${session.sessionId}:${question?.questionId ?? questionIndex}`
+      setRetakeLoadingKey(loadingKey)
 
-      if (!question?.questionId) {
-        setRetakeError('질문 ID를 찾을 수 없어 재답변을 시작할 수 없습니다.')
-        return
-      }
+      try {
+        const accessToken = resolveAccessToken(getAccessToken)
+        if (!accessToken) {
+          setRetakeError('로그인이 필요합니다.')
+          return
+        }
 
-      onStartRetake({
-        sessionId: resolvedSession.sessionId,
-        questionId: question.questionId,
-        questionText: question.question || '',
-      })
+        const sessionId = String(session.sessionId)
+        const detail = await getVideoInterviewSessionDetail(sessionId, accessToken)
+        if (!detail?.questions?.length) {
+          setRetakeError('세션 질문 정보를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.')
+          return
+        }
+
+        const resolvedSession = { ...session, ...detail }
+        setApiHistories((prev) =>
+          prev.map((item) => (String(item.sessionId) === sessionId ? { ...item, ...detail } : item))
+        )
+
+        const matchedQuestion = matchQuestionForRetake(detail.questions, question, questionIndex)
+        if (!collectRetakeQuestionIdCandidates(matchedQuestion).length) {
+          setRetakeError('질문 ID를 찾을 수 없어 재답변을 시작할 수 없습니다.')
+          return
+        }
+
+        const { sessionId: newSessionId, questionIds = [] } = await startVideoInterviewRetake(
+          sessionId,
+          matchedQuestion,
+          accessToken
+        )
+        registerRetakeChildSession(newSessionId, sessionId)
+
+        const retakeQuestionId =
+          questionIds[0] ??
+          matchedQuestion.retakeQuestionId ??
+          matchedQuestion.questionId ??
+          collectRetakeQuestionIdCandidates(matchedQuestion)[0]
+
+        onStartRetake({
+          requestId: `${sessionId}:${retakeQuestionId}:${Date.now()}`,
+          sourceSessionId: sessionId,
+          questionId: retakeQuestionId,
+          questionText: matchedQuestion.question || question?.question || '',
+          newSessionId,
+          questionIds,
+        })
+      } catch (error) {
+        setRetakeError(
+          error?.statusCode === 401 || error?.isAuthError
+            ? '로그인이 만료되었습니다. 다시 로그인해주세요.'
+            : error?.message || '재답변 준비에 실패했습니다.'
+        )
+      } finally {
+        setRetakeLoadingKey(null)
+      }
     },
-    [onStartRetake, ensureSessionQuestions]
+    [onStartRetake, getAccessToken]
   )
 
   const activeQuestion = sessionDetail?.questions?.[activeQuestionIndex] ?? null
@@ -580,7 +696,6 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview, o
         ) : (
           <div className="coach__history-list mock-history__session-list">
             {paginatedHistories.map((item) => {
-              const isSessionLoading = loadingSessionIds.has(String(item.sessionId))
               const questionBlocks =
                 item.questions?.length > 0
                   ? item.questions
@@ -622,28 +737,41 @@ export default function MockInterviewHistory({ isMobile, onStartMockInterview, o
                   <div className="mock-history__question-blocks">
                     {questionBlocks.map((question, idx) => (
                       <div key={question.questionId ?? `q-${idx}`} className="mock-history__question-block">
-                        <button
-                          type="button"
-                          className="mock-history__question-block-main"
-                          onClick={() => handleOpenSessionDetail(item, idx)}
-                        >
+                        <div className="mock-history__question-block-main">
                           <span className="badge">Q{question.index ?? idx + 1}</span>
                           <p className="mock-history__question-block-text">
                             {question.question || '질문 내용 없음'}
                           </p>
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn--secondary btn--sm mock-history__retake-btn"
-                          disabled={
-                            isSessionLoading ||
-                            item.status === 'IN_PROGRESS' ||
-                            !onStartRetake
-                          }
-                          onClick={() => void handleStartQuestionRetake(item, question)}
-                        >
-                          {isSessionLoading ? '불러오는 중…' : '다시 답변하기'}
-                        </button>
+                        </div>
+                        <div className="mock-history__question-block-actions">
+                          <button
+                            type="button"
+                            className="btn btn--secondary btn--sm mock-history__detail-btn"
+                            onClick={() => handleOpenSessionDetail(item, idx)}
+                          >
+                            상세보기
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn--secondary btn--sm mock-history__retake-btn"
+                            disabled={
+                              !canRetryMockSession(item) ||
+                              !onStartRetake ||
+                              retakeLoadingKey ===
+                                `${item.sessionId}:${question.questionId ?? `q-${idx}`}`
+                            }
+                            onClick={() => void handleStartQuestionRetake(item, question, idx)}
+                            title={
+                              !canRetryMockSession(item)
+                                ? '점수 산출이 완료된 기록만 다시 답변할 수 있습니다'
+                                : undefined
+                            }
+                          >
+                            {retakeLoadingKey === `${item.sessionId}:${question.questionId ?? `q-${idx}`}`
+                              ? '준비 중…'
+                              : '다시 답변하기'}
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

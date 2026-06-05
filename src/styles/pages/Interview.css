@@ -765,6 +765,36 @@
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
 }
 
+.coach__reanswer-modal {
+    max-width: 720px;
+}
+
+.coach__reanswer-modal-note {
+    margin: 0;
+    padding: var(--spacing-md) var(--spacing-lg) 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-dark-500);
+}
+
+.coach__reanswer-modal-question {
+    margin: var(--spacing-md) var(--spacing-lg) 0;
+    padding: var(--spacing-md);
+    background: var(--color-dark-50);
+    border-radius: var(--radius-md);
+}
+
+.coach__reanswer-modal-answer {
+    margin: var(--spacing-md) var(--spacing-lg) var(--spacing-lg);
+    padding: var(--spacing-lg);
+    background: #ffffff;
+    border: 1px solid var(--color-dark-100);
+    border-radius: var(--radius-md);
+}
+
+.coach__reanswer-modal-result {
+    margin: var(--spacing-md) var(--spacing-lg) 0;
+}
+
 .coach__modal-header {
     display: flex;
     justify-content: space-between;
@@ -2167,6 +2197,17 @@
     }
 }
 
+.coach__mock--hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+}
+
 /* Mock interview history */
 .mock-history__badge {
     background: rgba(99, 102, 241, 0.12);
@@ -2258,15 +2299,15 @@
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
-    border: none;
-    background: transparent;
     padding: 0;
     text-align: left;
-    cursor: pointer;
 }
 
-.mock-history__question-block-main:hover .mock-history__question-block-text {
-    color: var(--color-blue-600);
+.mock-history__question-block-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--spacing-xs);
 }
 
 .mock-history__question-block-text {
@@ -2555,8 +2596,12 @@
         align-items: stretch;
     }
 
-    .mock-history__retake-btn {
+    .mock-history__question-block-actions {
         align-self: stretch;
+    }
+
+    .mock-history__question-block-actions .btn {
+        flex: 1;
     }
 
     .mock-history__modal-overlay {
