@@ -160,11 +160,16 @@ function mergeApiHistoryLists(previousList, incomingList) {
     if (!item?.sessionId) continue
     const key = String(item.sessionId)
     const existing = map.get(key)
-    const existingIsNewer =
-      existing?.date &&
-      item.date &&
-      new Date(existing.date).getTime() >= new Date(item.date).getTime()
-    map.set(key, existing ? (existingIsNewer ? { ...item, ...existing } : { ...existing, ...item }) : item)
+    const preferIncoming =
+      Boolean(item?.retakeUpdatedAt || item?.isRetake) ||
+      (existing?.date &&
+        item.date &&
+        new Date(item.date).getTime() >= new Date(existing.date).getTime() &&
+        !Boolean(existing?.retakeUpdatedAt || existing?.isRetake))
+    map.set(
+      key,
+      existing ? (preferIncoming ? { ...existing, ...item } : { ...item, ...existing }) : item
+    )
   }
   return Array.from(map.values()).sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
@@ -176,19 +181,21 @@ function mergeMockHistories(apiList, localList) {
   for (const item of filterRetakeChildSessions(localList)) {
     if (item?.sessionId) map.set(String(item.sessionId), { ...item, source: item.source || 'local' })
   }
-  for (const item of apiList) {
+  for (const item of filterRetakeChildSessions(apiList)) {
     if (!item?.sessionId) continue
     const key = String(item.sessionId)
     const existing = map.get(key)
-    // 로컬(재답변 반영 등)이 API보다 최신이면 로컬 값을 우선한다.
+    const preferLocal =
+      Boolean(existing?.retakeUpdatedAt || existing?.isRetake) ||
+      (existing?.date &&
+        item.date &&
+        new Date(existing.date).getTime() >= new Date(item.date).getTime())
     map.set(
       key,
       existing
-        ? {
-            ...item,
-            ...existing,
-            source: existing.source || item.source || 'api',
-          }
+        ? preferLocal
+          ? { ...item, ...existing, source: existing.source || item.source || 'local' }
+          : { ...existing, ...item, source: existing.source || item.source || 'api' }
         : { ...item, source: item.source || 'api' }
     )
   }
@@ -355,7 +362,11 @@ export default function MockInterviewHistory({
   const [retakeLoadingKey, setRetakeLoadingKey] = useState(null)
 
   const mergedHistories = useMemo(
-    () => mergeMockHistories(apiHistories, [...(seedSessions || []), ...(mockInterviewHistory || [])]),
+    () =>
+      mergeMockHistories(apiHistories, [
+        ...(mockInterviewHistory || []),
+        ...(seedSessions || []),
+      ]),
     [apiHistories, mockInterviewHistory, seedSessions]
   )
 
@@ -604,6 +615,8 @@ export default function MockInterviewHistory({
           sourceSessionId: sessionId,
           questionId: retakeQuestionId,
           questionText: matchedQuestion.question || question?.question || '',
+          sourceSessionDate: resolvedSession.date ?? session.date ?? null,
+          sourceQuestions: resolvedSession.questions ?? session.questions ?? [],
           newSessionId,
           questionIds,
         })

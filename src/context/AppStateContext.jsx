@@ -7,6 +7,7 @@ import {
 } from '../data/appConstants'
 import * as memberApi from '../utils/memberApi'
 import {
+  collectRetakeQuestionIdCandidates,
   filterRetakeChildSessions,
   isRetakeChildSession,
 } from '../utils/interviewApi'
@@ -97,6 +98,66 @@ function extractApiUser(response) {
     response?.user ??
     response
   )
+}
+
+function getEntryQuestionText(entry) {
+  if (!entry) return ''
+  return typeof entry.question === 'object' ? entry.question?.text ?? '' : entry.question ?? ''
+}
+
+function getTextHistoryEntryKey(entry) {
+  const key = entry?.historyId ?? entry?.id ?? getEntryQuestionText(entry)
+  return key != null && key !== '' ? String(key) : null
+}
+
+function matchesInterviewHistoryEntry(entry, historyId, { questionId, questionText } = {}) {
+  if (!entry) return false
+  const entryId = entry.historyId ?? entry.id
+  if (historyId != null && entryId != null && String(entryId) === String(historyId)) {
+    return true
+  }
+  if (questionId != null) {
+    const sourceIds = collectRetakeQuestionIdCandidates({ questionId, id: questionId })
+    const entryIds = collectRetakeQuestionIdCandidates(entry)
+    if (sourceIds.some((id) => entryIds.includes(id))) return true
+  }
+  const normalizedQuestionText = (questionText || '').trim()
+  if (normalizedQuestionText && getEntryQuestionText(entry).trim() === normalizedQuestionText) {
+    return true
+  }
+  return false
+}
+
+function questionIdsMatch(sourceQuestionId, question) {
+  const sourceIds = collectRetakeQuestionIdCandidates({
+    questionId: sourceQuestionId,
+    id: sourceQuestionId,
+  })
+  if (!sourceIds.length) return false
+  const targetIds = collectRetakeQuestionIdCandidates(question)
+  return sourceIds.some((id) => targetIds.includes(id))
+}
+
+function patchSessionQuestions(questions, sourceQuestionId, questionText, questionPatch) {
+  const list = Array.isArray(questions) ? [...questions] : []
+  let targetIndex = list.findIndex((q) => questionIdsMatch(sourceQuestionId, q))
+  if (targetIndex === -1 && questionText) {
+    targetIndex = list.findIndex(
+      (q) => (q?.question || q?.text || '').trim() === questionText.trim()
+    )
+  }
+  if (targetIndex === -1 && list.length === 1) targetIndex = 0
+  if (targetIndex === -1) {
+    list.push({
+      questionId: sourceQuestionId,
+      question: questionText || '',
+      index: list.length + 1,
+      ...questionPatch,
+    })
+    return list
+  }
+  list[targetIndex] = { ...list[targetIndex], ...questionPatch }
+  return list
 }
 
 export function AppProvider({children}) {
@@ -440,16 +501,17 @@ export function AppProvider({children}) {
     throw new Error('재피드백 목데이터가 비활성화되었습니다. API 연동을 사용해주세요.')
   }, [])
 
-  // 면접 결과 기록
-  const recordInterviewResult = useCallback((result) => {
+  // 면접 결과 기록 (options.skipRewards: 재답변 등 리워드·활동 미반영)
+  const recordInterviewResult = useCallback((result, options = {}) => {
+    const skipRewards = options?.skipRewards === true
     const allHistory = [...scoreHistory, ...companyHistory]
     const isFirstToday = !allHistory.some(
       (entry) => new Date(entry.date).toDateString() === new Date().toDateString(),
     )
 
-    const earnedPoints = result.earnedPoints ?? result.score ?? 0
+    const earnedPoints = skipRewards ? 0 : (result.earnedPoints ?? result.score ?? 0)
 
-    if (isFirstToday && earnedPoints > 0) {
+    if (!skipRewards && isFirstToday && earnedPoints > 0) {
       setUser(prev => prev ? {
         ...prev,
         points: (prev.points || 0) + earnedPoints,
@@ -465,11 +527,12 @@ export function AppProvider({children}) {
       question: result.question,
       category: result.category,
       answer: result.answer,
-      historyId: result.historyId,
+      historyId: result.historyId ?? `h-${Date.now()}`,
       questionId: result.questionId ?? null,
       strengths: result.strengths ?? [],
       improvements: result.improvements ?? [],
       recommendations: result.recommendations ?? [],
+      earnedPoints: skipRewards ? 0 : earnedPoints,
       // 기업 면접 관련 필드
       source: result.source,
       company: result.company,
@@ -478,44 +541,168 @@ export function AppProvider({children}) {
 
     // source가 'jobpost'면 기업 면접 히스토리에, 아니면 일반 히스토리에 저장
     if (result.source === 'jobpost') {
-      setCompanyHistory(prev => [newEntry, ...prev])
+      setCompanyHistory((prev) => {
+        const next = [newEntry, ...prev]
+        localStorage.setItem(STORAGE_COMPANY_HISTORY_KEY, JSON.stringify(next))
+        return next
+      })
     } else {
-      setScoreHistory(prev => [newEntry, ...prev])
+      setScoreHistory((prev) => {
+        const next = [newEntry, ...prev]
+        localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(next))
+        return next
+      })
     }
-    setLastFeedback(result)
 
-    // 활동 히트맵 업데이트
-    const today = new Date()
-    const weekIndex = Math.floor((today.getTime() - new Date(today.getFullYear(), 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000))
-    const dayIndex = today.getDay()
+    if (!skipRewards) {
+      setLastFeedback(result)
 
-    setActivity(prev => {
-      const newActivity = prev.map(week => [...week])
-      if (newActivity[weekIndex]) {
-        newActivity[weekIndex][dayIndex] = Math.min(4, (newActivity[weekIndex][dayIndex] || 0) + 1)
-      }
-      return newActivity
-    })
+      // 활동 히트맵 업데이트
+      const today = new Date()
+      const weekIndex = Math.floor((today.getTime() - new Date(today.getFullYear(), 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000))
+      const dayIndex = today.getDay()
+
+      setActivity(prev => {
+        const newActivity = prev.map(week => [...week])
+        if (newActivity[weekIndex]) {
+          newActivity[weekIndex][dayIndex] = Math.min(4, (newActivity[weekIndex][dayIndex] || 0) + 1)
+        }
+        return newActivity
+      })
+    }
 
     return {earnedPoints, isFirstToday}
   }, [scoreHistory, companyHistory])
 
-  const updateInterviewHistoryEntry = useCallback((historyId, patch) => {
-    if (historyId == null) return
+  const updateInterviewHistoryEntry = useCallback((historyId, patch, matchHints = {}) => {
+    if (historyId == null && !matchHints.questionId && !matchHints.questionText) return false
 
+    let updated = false
     const applyPatch = (entry) => {
-      const entryId = entry.historyId ?? entry.id
-      if (String(entryId) !== String(historyId)) return entry
+      if (!matchesInterviewHistoryEntry(entry, historyId, matchHints)) return entry
+      updated = true
       return {
         ...entry,
         ...patch,
-        date: patch.date ?? new Date().toISOString(),
+        historyId: entry.historyId ?? historyId ?? patch.historyId,
+        date: patch.date ?? entry.date,
       }
     }
 
     setScoreHistory((prev) => prev.map(applyPatch))
     setCompanyHistory((prev) => prev.map(applyPatch))
+    return updated
   }, [])
+
+  /** 일반·기업 면접 기록 재답변 반영 (모의 면접 updateMockInterviewSessionAfterRetake 패턴) */
+  const updateTextInterviewHistoryAfterRetake = useCallback(
+    ({
+      sourceHistoryId,
+      questionId,
+      questionText,
+      patch,
+      target = 'score',
+      sourceEntrySnapshot,
+      sourceEntryDate,
+    }) => {
+      let updatedEntry = null
+      const retakeUpdatedAt = new Date().toISOString()
+      const resolvedHistoryId =
+        sourceHistoryId ??
+        sourceEntrySnapshot?.historyId ??
+        sourceEntrySnapshot?.id ??
+        null
+
+      const findEntryIndex = (list) => {
+        if (resolvedHistoryId != null) {
+          const byHistoryId = list.findIndex((entry) => {
+            const entryId = entry?.historyId ?? entry?.id
+            return entryId != null && String(entryId) === String(resolvedHistoryId)
+          })
+          if (byHistoryId !== -1) return byHistoryId
+        }
+
+        if (questionId != null) {
+          const sourceIds = collectRetakeQuestionIdCandidates({ questionId, id: questionId })
+          const byQuestionId = list.findIndex((entry) => {
+            const entryIds = collectRetakeQuestionIdCandidates(entry)
+            return sourceIds.some((id) => entryIds.includes(id))
+          })
+          if (byQuestionId !== -1) return byQuestionId
+        }
+
+        const normalizedQuestionText = (questionText || '').trim()
+        if (!normalizedQuestionText) return -1
+        return list.findIndex(
+          (entry) => getEntryQuestionText(entry).trim() === normalizedQuestionText
+        )
+      }
+
+      const buildUpdatedEntry = (entry) => {
+        const base = entry ?? sourceEntrySnapshot ?? {}
+        const stableHistoryId =
+          entry?.historyId ??
+          entry?.id ??
+          resolvedHistoryId ??
+          sourceEntrySnapshot?.historyId ??
+          sourceEntrySnapshot?.id ??
+          getTextHistoryEntryKey(base) ??
+          null
+        return {
+          ...base,
+          ...patch,
+          historyId: stableHistoryId ?? `h-retake-${Date.now()}`,
+          questionId: patch.questionId ?? entry?.questionId ?? questionId ?? base.questionId ?? null,
+          question: patch.question ?? questionText ?? getEntryQuestionText(base),
+          answer: patch.answer ?? entry?.answer ?? base.answer,
+          category: patch.category ?? entry?.category ?? base.category,
+          source: patch.source ?? entry?.source ?? base.source,
+          company: patch.company ?? entry?.company ?? base.company,
+          position: patch.position ?? entry?.position ?? base.position,
+          date: sourceEntryDate ?? entry?.date ?? base.date ?? patch.date,
+          earnedPoints: entry?.earnedPoints ?? base.earnedPoints,
+          retakeUpdatedAt,
+          isRetake: true,
+        }
+      }
+
+      const applyToList = (prev) => {
+        const targetIndex = findEntryIndex(prev)
+        if (targetIndex !== -1) {
+          const next = [...prev]
+          updatedEntry = buildUpdatedEntry(prev[targetIndex])
+          next[targetIndex] = updatedEntry
+          return next
+        }
+
+        updatedEntry = buildUpdatedEntry(null)
+        const normalizedQuestionText = (questionText || '').trim()
+        const deduped = normalizedQuestionText
+          ? prev.filter(
+              (entry) => getEntryQuestionText(entry).trim() !== normalizedQuestionText
+            )
+          : prev
+        return [updatedEntry, ...deduped]
+      }
+
+      if (target === 'company') {
+        setCompanyHistory((prev) => {
+          const next = applyToList(prev)
+          localStorage.setItem(STORAGE_COMPANY_HISTORY_KEY, JSON.stringify(next))
+          return next
+        })
+        return updatedEntry
+      }
+
+      setScoreHistory((prev) => {
+        const next = applyToList(prev)
+        localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(next))
+        return next
+      })
+      return updatedEntry
+    },
+    []
+  )
 
   const updateMockInterviewSessionAfterRetake = useCallback(
     ({
@@ -525,71 +712,76 @@ export function AppProvider({children}) {
       overallScore,
       summary,
       questionText,
+      sourceQuestionsSnapshot,
+      sourceSessionDate,
     }) => {
-      if (!sourceSessionId || sourceQuestionId == null || sourceQuestionId === '') return
+      if (!sourceSessionId || sourceQuestionId == null || sourceQuestionId === '') return null
+
+      let updatedSession = null
+      const retakeUpdatedAt = new Date().toISOString()
 
       setMockInterviewHistory((prev) => {
         const cleanedPrev = filterRetakeChildSessions(prev)
-        const updatedAt = new Date().toISOString()
-        const applyQuestionPatch = (questions) => {
-          const list = Array.isArray(questions) ? [...questions] : []
-          let targetIndex = list.findIndex(
-            (q) => String(q.questionId) === String(sourceQuestionId)
-          )
-          if (targetIndex === -1 && list.length === 1) targetIndex = 0
-          if (targetIndex === -1) {
-            list.push({
-              questionId: sourceQuestionId,
-              question: questionText || '',
-              index: 1,
-              ...questionPatch,
-            })
-            return list
-          }
-          list[targetIndex] = { ...list[targetIndex], ...questionPatch }
-          return list
-        }
+        const applyQuestionPatch = (questions) =>
+          patchSessionQuestions(questions, sourceQuestionId, questionText, questionPatch)
 
         const hasSession = cleanedPrev.some(
           (session) => String(session.sessionId) === String(sourceSessionId)
         )
 
+        const buildUpdatedSession = (session) => {
+          const questions = applyQuestionPatch(
+            session?.questions?.length
+              ? session.questions
+              : sourceQuestionsSnapshot?.length
+                ? sourceQuestionsSnapshot
+                : []
+          )
+          const scores = questions
+            .map((q) => q.score)
+            .filter((score) => typeof score === 'number')
+          const computedOverall =
+            overallScore ??
+            (scores.length
+              ? Math.round(scores.reduce((acc, cur) => acc + cur, 0) / scores.length)
+              : session?.overallScore)
+
+          return {
+            ...(session ?? {}),
+            sessionId: String(sourceSessionId),
+            status: session?.status ?? null,
+            questions,
+            overallScore: computedOverall,
+            summary: summary || session?.summary || '',
+            date: sourceSessionDate ?? session?.date ?? retakeUpdatedAt,
+            retakeUpdatedAt,
+            questionCount: questions.length,
+            questionsPreview: questions
+              .slice(0, 3)
+              .map((q) => q.question)
+              .filter(Boolean),
+            source: 'local',
+            isRetake: true,
+          }
+        }
+
         const next = hasSession
           ? cleanedPrev.map((session) => {
               if (String(session.sessionId) !== String(sourceSessionId)) return session
-              const questions = applyQuestionPatch(session.questions)
-              const scores = questions
-                .map((q) => q.score)
-                .filter((score) => typeof score === 'number')
-              const computedOverall =
-                overallScore ??
-                (scores.length
-                  ? Math.round(scores.reduce((acc, cur) => acc + cur, 0) / scores.length)
-                  : session.overallScore)
-
-              return {
-                ...session,
-                questions,
-                overallScore: computedOverall,
-                summary: summary || session.summary,
-                date: updatedAt,
-                source: session.source || 'local',
-              }
+              const updated = buildUpdatedSession(session)
+              updatedSession = updated
+              return updated
             })
           : [
-              {
-                sessionId: String(sourceSessionId),
-                status: null,
-                date: updatedAt,
-                overallScore: overallScore ?? questionPatch?.score ?? null,
-                summary: summary || '',
-                questionCount: 1,
-                questionsPreview: questionText ? [questionText] : [],
-                questions: applyQuestionPatch([]),
-                source: 'local',
-              },
+              buildUpdatedSession(null),
               ...cleanedPrev,
             ].slice(0, 50)
+
+        if (!updatedSession) {
+          updatedSession = next.find(
+            (session) => String(session.sessionId) === String(sourceSessionId)
+          )
+        }
 
         const filteredNext = filterRetakeChildSessions(next)
         if (user?.id) {
@@ -597,6 +789,8 @@ export function AppProvider({children}) {
         }
         return filteredNext
       })
+
+      return updatedSession
     },
     [user?.id]
   )
@@ -615,6 +809,35 @@ export function AppProvider({children}) {
         if (!session?.sessionId) continue
         const key = String(session.sessionId)
         const existing = map.get(key)
+        const hasLocalRetake = Boolean(existing?.retakeUpdatedAt || existing?.isRetake)
+
+        if (hasLocalRetake && existing) {
+          map.set(key, {
+            ...session,
+            ...existing,
+            questions: existing.questions?.length ? existing.questions : session.questions || [],
+            overallScore:
+              existing.overallScore !== undefined && existing.overallScore !== null
+                ? existing.overallScore
+                : session.overallScore,
+            summary: existing.summary || session.summary || '',
+            questionsPreview: existing.questionsPreview?.length
+              ? existing.questionsPreview
+              : session.questionsPreview || [],
+            questionCount:
+              existing.questionCount ??
+              existing.questions?.length ??
+              session.questionCount ??
+              session.questions?.length ??
+              0,
+            date: existing.date ?? session.date,
+            retakeUpdatedAt: existing.retakeUpdatedAt,
+            isRetake: existing.isRetake,
+            source: existing.source || 'local',
+          })
+          continue
+        }
+
         const existingIsNewer =
           existing?.date &&
           session.date &&
@@ -811,6 +1034,7 @@ export function AppProvider({children}) {
     updateProfile,
     recordInterviewResult,
     updateInterviewHistoryEntry,
+    updateTextInterviewHistoryAfterRetake,
     updateMockInterviewSessionAfterRetake,
     syncMockInterviewHistories,
     recordMockInterviewSession,

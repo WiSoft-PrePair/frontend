@@ -327,10 +327,16 @@ export default function MockInterview({
   historyRetakeRequest,
   onHistoryRetakeConsumed,
   onVideoRetakeComplete,
+  onRetakeSessionUpdated,
 }) {
   const { getAccessToken, recordMockInterviewSession, updateMockInterviewSessionAfterRetake } =
     useAppState()
-  const [phase, setPhase] = useState('ready') // ready | loading | interview | analyzing | feedback
+  const [phase, setPhase] = useState(() =>
+    historyRetakeRequest?.requestId ? 'loading' : 'ready'
+  ) // ready | loading | interview | analyzing | feedback
+  const [loadingVariant, setLoadingVariant] = useState(() =>
+    historyRetakeRequest?.requestId ? 'retake' : 'default'
+  )
   const [isRetakeMode, setIsRetakeMode] = useState(false)
   const [isStartingRetake, setIsStartingRetake] = useState(false)
   const isStartingRetakeRef = useRef(false)
@@ -385,6 +391,7 @@ export default function MockInterview({
   const preloadAbortControllerRef = useRef(null) // 프리로딩 취소용
   /** 언마운트 시에만 false — `phase` 전환 시 loading effect cleanup이 `cancelled`를 켜도 타이머는 계속 돌아야 함 */
   const mockInterviewMountedRef = useRef(true)
+  const pendingTimersRef = useRef([])
   const answersSnapshotRef = useRef([])
   const mediaRecorderRef = useRef(null)
   const recordingPromiseRef = useRef(null)
@@ -408,7 +415,23 @@ export default function MockInterview({
     mockInterviewMountedRef.current = true
     return () => {
       mockInterviewMountedRef.current = false
+      pendingTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+      pendingTimersRef.current = []
     }
+  }, [])
+
+  const scheduleMockTimer = useCallback((callback, delayMs) => {
+    const timerId = window.setTimeout(() => {
+      pendingTimersRef.current = pendingTimersRef.current.filter((id) => id !== timerId)
+      callback()
+    }, delayMs)
+    pendingTimersRef.current.push(timerId)
+    return timerId
+  }, [])
+
+  const clearMockTimers = useCallback(() => {
+    pendingTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+    pendingTimersRef.current = []
   }, [])
 
   // isSpeaking 상태를 TTS 상태와 동기화
@@ -827,10 +850,14 @@ export default function MockInterview({
       preloadAbortControllerRef.current.abort()
       preloadAbortControllerRef.current = null
     }
+    clearMockTimers()
     setPhase('ready')
+    setLoadingVariant('default')
+    setIsRetakeMode(false)
+    historyRetakeMetaRef.current = null
     setIsPreloading(false)
     setPreloadProgress(0)
-  }, [])
+  }, [clearMockTimers])
 
   // 모바일 오디오 재생을 위한 초기화 (사용자 인터랙션 시 호출)
   const initAudioForMobile = useCallback(() => {
@@ -902,13 +929,14 @@ export default function MockInterview({
         console.error('질문 음성 재생 오류:', error)
         disableTts(error?.message || 'TTS 서버 오류로 음성 안내를 중단합니다.')
       } finally {
-        setTimeout(() => {
+        scheduleMockTimer(() => {
+          if (!mockInterviewMountedRef.current || phaseRef.current !== 'interview') return
           setIsSpeaking(false)
           startCountdown()
         }, 300)
       }
     },
-    [startCountdown, selectedSpeaker, disableTts, getAccessToken]
+    [startCountdown, selectedSpeaker, disableTts, getAccessToken, scheduleMockTimer]
   )
 
   // 프리로드는 로딩 UI가 실제로 마운트된 뒤에만 시작한다.
@@ -929,6 +957,9 @@ export default function MockInterview({
         if (cancelled) return
         if (!stream) {
           setPhase('ready')
+          setLoadingVariant('default')
+          setIsRetakeMode(false)
+          historyRetakeMetaRef.current = null
           setErrorMessage(
             cameraStartError ||
               '카메라·마이크를 사용할 수 없어 면접을 시작할 수 없습니다. 브라우저에서 권한을 허용한 뒤 다시 시도해주세요.'
@@ -952,12 +983,12 @@ export default function MockInterview({
 
         startAudioAnalysis(stream)
 
-        setTimeout(() => {
+        scheduleMockTimer(() => {
           if (!mockInterviewMountedRef.current) return
           attachStreamToVideo()
         }, 500)
 
-        setTimeout(() => {
+        scheduleMockTimer(() => {
           if (!mockInterviewMountedRef.current) return
           speakQuestion(questions[0])
         }, 1500)
@@ -965,6 +996,9 @@ export default function MockInterview({
         if (cancelled) return
         console.error('[MockInterview] 면접 준비 단계 오류:', e)
         setPhase('ready')
+        setLoadingVariant('default')
+        setIsRetakeMode(false)
+        historyRetakeMetaRef.current = null
         setErrorMessage(e?.message || '면접 준비 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.')
       }
     }
@@ -986,6 +1020,7 @@ export default function MockInterview({
     startAudioAnalysis,
     speakQuestion,
     attachStreamToVideo,
+    scheduleMockTimer,
   ])
 
   // 녹화 시간 타이머
@@ -1045,6 +1080,7 @@ export default function MockInterview({
     setIsFetchingInterviewSetup(false)
 
     // 질문 음성 프리로딩·카메라·면접 진입은 `phase === 'loading'` effect에서 처리
+    setLoadingVariant('default')
     setPhase('loading')
   }
 
@@ -1251,9 +1287,13 @@ export default function MockInterview({
         })) ?? []
 
       if (historyRetakeMeta?.sourceSessionId && historyRetakeMeta?.sourceQuestionId != null) {
+        const sourceQuestionIds = collectRetakeQuestionIdCandidates({
+          questionId: historyRetakeMeta.sourceQuestionId,
+          id: historyRetakeMeta.sourceQuestionId,
+        })
         const retakeQuestion =
-          mappedQuestions.find(
-            (q) => String(q.questionId) === String(historyRetakeMeta.sourceQuestionId)
+          mappedQuestions.find((q) =>
+            collectRetakeQuestionIdCandidates(q).some((id) => sourceQuestionIds.includes(id))
           ) ?? mappedQuestions[0]
 
         const questionText =
@@ -1265,25 +1305,20 @@ export default function MockInterview({
           ...(retakeQuestion ?? {}),
         }
 
-        updateMockInterviewSessionAfterRetake({
+        const updatedSession = updateMockInterviewSessionAfterRetake({
           sourceSessionId: historyRetakeMeta.sourceSessionId,
           sourceQuestionId: historyRetakeMeta.sourceQuestionId,
           questionText,
           questionPatch: patchedQuestion,
           overallScore: normalized.overallScore ?? retakeQuestion?.score ?? null,
           summary: normalized.overallSummary || '',
+          sourceQuestionsSnapshot: historyRetakeMeta.sourceQuestions,
+          sourceSessionDate: historyRetakeMeta.sourceSessionDate,
         })
 
-        lastRetakeUpdatedSessionRef.current = {
-          sessionId: String(historyRetakeMeta.sourceSessionId),
-          status: null,
-          date: new Date().toISOString(),
-          overallScore: normalized.overallScore ?? retakeQuestion?.score ?? null,
-          summary: normalized.overallSummary || '',
-          questionCount: 1,
-          questionsPreview: questionText ? [questionText] : [],
-          questions: [patchedQuestion],
-          source: 'local',
+        if (updatedSession) {
+          lastRetakeUpdatedSessionRef.current = updatedSession
+          onRetakeSessionUpdated?.(updatedSession)
         }
       } else {
         recordMockInterviewSession({
@@ -1322,6 +1357,7 @@ export default function MockInterview({
     recordMockInterviewSession,
     updateMockInterviewSessionAfterRetake,
     onVideoRetakeComplete,
+    onRetakeSessionUpdated,
     stopCamera,
     stopAudioAnalysis,
     stopTTS,
@@ -1393,17 +1429,17 @@ export default function MockInterview({
       setPhase('interview')
       startAudioAnalysis(stream)
 
-      setTimeout(() => {
+      scheduleMockTimer(() => {
         if (!mockInterviewMountedRef.current) return
         attachStreamToVideo()
       }, 0)
 
-      setTimeout(() => {
+      scheduleMockTimer(() => {
         if (!mockInterviewMountedRef.current) return
         speakQuestion(question)
       }, 800)
     },
-    [selectedQuestions, initAudioForMobile, startCamera, startAudioAnalysis, speakQuestion, attachStreamToVideo]
+    [selectedQuestions, initAudioForMobile, startCamera, startAudioAnalysis, speakQuestion, attachStreamToVideo, scheduleMockTimer]
   )
 
   const startRetakeQueue = useCallback(
@@ -1411,6 +1447,8 @@ export default function MockInterview({
       if (!sortedIndexes.length || isStartingRetake) return
 
       setErrorMessage('')
+      setLoadingVariant('retake')
+      setPhase('loading')
       setIsStartingRetake(true)
 
       try {
@@ -1423,6 +1461,7 @@ export default function MockInterview({
         setSelectedQuestions(retakeQuestions)
         setAnswers(retakeAnswers)
         answersSnapshotRef.current = [...retakeAnswers]
+        setIsRetakeMode(true)
 
         retakeQueueRef.current =
           retakeQuestions.length > 1
@@ -1435,6 +1474,8 @@ export default function MockInterview({
         setErrorMessage(error?.message || '재답변 준비에 실패했습니다.')
         retakeQueueRef.current = []
         setRetakeQueueMeta(null)
+        setLoadingVariant('default')
+        setPhase('ready')
       } finally {
         setIsStartingRetake(false)
       }
@@ -1464,6 +1505,8 @@ export default function MockInterview({
       sessionId,
       questionId,
       questionText,
+      sourceSessionDate,
+      sourceQuestions,
       newSessionId: prefetchedNewSessionId,
       questionIds: prefetchedQuestionIds = [],
     }) => {
@@ -1476,11 +1519,15 @@ export default function MockInterview({
       }
 
       setErrorMessage('')
+      setLoadingVariant('retake')
+      setPhase('loading')
       isStartingRetakeRef.current = true
       setIsStartingRetake(true)
 
       try {
         initAudioForMobile()
+        ttsEnabledRef.current = true
+        setTtsEnabled(true)
 
         const accessToken = getAccessToken?.()
         const { sessionId: newSessionId } = prefetchedNewSessionId
@@ -1492,17 +1539,25 @@ export default function MockInterview({
           sourceSessionId: originalSessionId,
           sourceQuestionId: questionId,
           questionText: questionText || '',
+          sourceSessionDate: sourceSessionDate || null,
+          sourceQuestions: Array.isArray(sourceQuestions) ? sourceQuestions : [],
         }
         setIsHistoryRetakeFeedback(true)
+        setIsRetakeMode(true)
 
-        const historyFallback = {
-          id: String(prefetchedQuestionIds[0] ?? questionId),
-          text: questionText || '',
+        const retakeQuestionId = String(prefetchedQuestionIds[0] ?? questionId)
+        let retakeQuestion = {
+          id: retakeQuestionId,
+          text: (questionText || '').trim(),
           category: 'VIDEO',
           sessionId: newSessionId,
         }
-        const retakeQuestions = await buildRetakeQuestions(newSessionId, [0], historyFallback)
-        const retakeQuestion = retakeQuestions[0]
+
+        if (!retakeQuestion.text) {
+          const retakeQuestions = await buildRetakeQuestions(newSessionId, [0], retakeQuestion)
+          retakeQuestion = retakeQuestions[0]
+        }
+
         if (!retakeQuestion?.id || !retakeQuestion?.text?.trim()) {
           throw new Error('재답변할 질문 정보가 없습니다.')
         }
@@ -1511,15 +1566,29 @@ export default function MockInterview({
         setBehaviorAnalysis(null)
         setDisplayedOverallScore(0)
         setVideoSessionId(newSessionId)
-        setSelectedQuestions(retakeQuestions)
+        setSelectedQuestions([retakeQuestion])
         setAnswers([])
         answersSnapshotRef.current = []
         retakeQueueRef.current = []
         setRetakeQueueMeta({ current: 1, total: 1 })
         setSelectedRetakeIndexes(new Set())
+        setIsQuestionVisible(false)
+
+        try {
+          await preloadQuestionAudios([retakeQuestion])
+        } catch (preloadError) {
+          if (preloadError?.name !== 'AbortError') {
+            console.warn('[MockInterview] retake preload skipped:', preloadError)
+          }
+        }
+
+        onHistoryRetakeConsumed?.()
         await beginRetakeInterview(0, retakeQuestion)
       } catch (error) {
         historyRetakeMetaRef.current = null
+        setIsRetakeMode(false)
+        setLoadingVariant('default')
+        setPhase('ready')
         console.error('[MockInterview] startRetakeFromHistory error:', error)
         setErrorMessage(error?.message || '재답변 준비에 실패했습니다.')
         throw error
@@ -1528,7 +1597,7 @@ export default function MockInterview({
         setIsStartingRetake(false)
       }
     },
-    [initAudioForMobile, getAccessToken, buildRetakeQuestions, beginRetakeInterview]
+    [initAudioForMobile, getAccessToken, buildRetakeQuestions, preloadQuestionAudios, beginRetakeInterview, onHistoryRetakeConsumed]
   )
 
   const startRetakeFromHistoryRef = useRef(startRetakeFromHistory)
@@ -1543,6 +1612,8 @@ export default function MockInterview({
 
     processedHistoryRetakeIdRef.current = historyRetakeRequest.requestId
     setErrorMessage('')
+    setLoadingVariant('retake')
+    setPhase('loading')
     let cancelled = false
     void startRetakeFromHistoryRef.current(historyRetakeRequest).catch((error) => {
       if (cancelled) return
@@ -1655,6 +1726,7 @@ export default function MockInterview({
   // 컴포넌트 언마운트 시 정리
   useEffect(() => {
     return () => {
+      clearMockTimers()
       if (analysisAbortRef.current) analysisAbortRef.current.abort()
       if (mediaRecorderRef.current?.state === 'recording') {
         try {
@@ -1667,7 +1739,7 @@ export default function MockInterview({
       stopAudioAnalysis()
       stopTTS()
     }
-  }, [stopCamera, stopAudioAnalysis, stopTTS])
+  }, [stopCamera, stopAudioAnalysis, stopTTS, clearMockTimers])
 
   // 면접 진행 중일 때 브라우저 히스토리 관리
   useEffect(() => {
@@ -1749,7 +1821,7 @@ export default function MockInterview({
   return (
     <div className="mock-interview">
       <AnimatePresence mode="wait">
-        {phase === 'ready' && (
+        {phase === 'ready' && !historyRetakeRequest && !isStartingRetake && (
           <Motion.div
             key="ready"
             initial={{ opacity: 0 }}
@@ -1874,9 +1946,25 @@ export default function MockInterview({
             className="mock-interview__ready"
           >
             <div className="mock-interview__intro mock-interview__intro--loading card">
-              <div className="mock-interview__intro-icon">🎙️</div>
-              <h2>면접 준비 중...</h2>
-              <p>질문 음성을 미리 로딩하고 있습니다.</p>
+              <div className="mock-interview__intro-icon">
+                {loadingVariant === 'retake' && selectedQuestions.length === 0 ? '⏳' : '🎙️'}
+              </div>
+              <h2>
+                {loadingVariant === 'retake' ? '재답변 준비 중...' : '면접 준비 중...'}
+              </h2>
+              <p>
+                {loadingVariant === 'retake' && selectedQuestions.length === 0
+                  ? '질문을 불러오고 있습니다.'
+                  : loadingVariant === 'retake'
+                    ? '질문 음성을 불러오고 카메라를 준비합니다.'
+                    : '질문 음성을 미리 로딩하고 있습니다.'}
+              </p>
+              {loadingVariant === 'retake' && selectedQuestions.length === 0 ? (
+                <div className="mock-interview__loading-progress mock-interview__loading-progress--indeterminate">
+                  <div className="spinner" />
+                </div>
+              ) : (
+                <>
               {preloadError && (
                 <p className="mock-interview__preload-error">
                   ⚠️ {preloadError} (질문 표시 시 음성으로 시도합니다)
@@ -1897,6 +1985,8 @@ export default function MockInterview({
               >
                 취소
               </button>
+                </>
+              )}
             </div>
           </Motion.div>
         )}
@@ -2241,7 +2331,7 @@ export default function MockInterview({
                 className="btn btn--primary btn--lg btn--block"
                 onClick={handleGoToHistoryAfterRetake}
               >
-                면접 기록에서 확인하기
+                확인
               </button>
             ) : (
               <button className="btn btn--primary btn--lg btn--block" onClick={handleRestart}>

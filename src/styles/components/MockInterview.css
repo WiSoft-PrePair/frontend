@@ -1031,7 +1031,11 @@
   color: var(--color-blue-500);
 }
 
-/* 재답변 */
+.mock-interview__loading-progress--indeterminate {
+    display: flex;
+    justify-content: center;
+    padding: 1.5rem 0;
+}
 .mock-interview__retake-banner {
   display: flex;
   align-items: center;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { motion as Motion, AnimatePresence } from 'framer-motion'
 import { useAppState } from '../context/AppStateContext'
@@ -374,11 +374,24 @@ function normalizeFeedbackResponse(response, question, answer) {
   }
 }
 
+function formatInterviewDateTime(dateValue) {
+  if (!dateValue) return '-'
+  const date = new Date(dateValue)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleString('ko-KR', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 export default function CoachPage() {
   const {
     user,
     recordInterviewResult,
-    updateInterviewHistoryEntry,
     lastFeedback,
     scoreHistory,
     companyHistory,
@@ -397,7 +410,6 @@ export default function CoachPage() {
   const [answer, setAnswer] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [feedback, setFeedback] = useState(null)
-  const [histories, setHistories] = useState([])
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(true)
   const [error, setError] = useState('')
 
@@ -440,13 +452,18 @@ export default function CoachPage() {
   const [historySubTab, setHistorySubTab] = useState(() =>
     VALID_HISTORY_SUBS.includes(historySubParam) ? historySubParam : 'general'
   )
-
   const effectiveHistorySubTab =
     activeTab === 'history' &&
     historySubParam &&
     VALID_HISTORY_SUBS.includes(historySubParam)
       ? historySubParam
       : historySubTab
+
+  const histories = useMemo(() => {
+    if (effectiveHistorySubTab === 'company') return companyHistory || []
+    if (effectiveHistorySubTab === 'general') return scoreHistory || []
+    return []
+  }, [effectiveHistorySubTab, companyHistory, scoreHistory])
 
   useEffect(() => {
     if (
@@ -598,19 +615,12 @@ export default function CoachPage() {
     fetchTextQuestion().finally(() => setIsLoadingQuestion(false))
   }, [user?.id, fetchTextQuestion])
 
-  // 히스토리는 컨텍스트(로컬 저장)에서 로드
+  // 히스토리 탭 진입 시 검색·페이지 초기화
   useEffect(() => {
-    if (activeTab === 'history') {
-      if (historySubTab === 'company') {
-        setHistories(companyHistory || [])
-      } else if (historySubTab === 'general') {
-        setHistories(scoreHistory || [])
-      }
-      // 서브탭 변경 시 검색어와 페이지 초기화
-      setSearchQuery('')
-      setCurrentPage(1)
-    }
-  }, [activeTab, scoreHistory, companyHistory, historySubTab])
+    if (activeTab !== 'history') return
+    setSearchQuery('')
+    setCurrentPage(1)
+  }, [activeTab, historySubTab])
 
   // URL에서 historyId가 있으면 해당 히스토리 상세 모달 열기
   useEffect(() => {
@@ -676,16 +686,9 @@ export default function CoachPage() {
     }
   }
 
-  const handleNewQuestion = async () => {
+  const handleConfirmPracticeFeedback = () => {
     setFeedback(null)
     setAnswer('')
-    setQuestion(null)
-    setIsLoadingQuestion(true)
-    try {
-      await fetchTextQuestion()
-    } finally {
-      setIsLoadingQuestion(false)
-    }
   }
 
   const getScoreColor = (score) => {
@@ -705,8 +708,6 @@ export default function CoachPage() {
     setIsDetailOpen(false)
     setSelectedHistory(null)
   }
-
-  const resolveHistoryItemId = (item) => item?.historyId ?? item?.id ?? null
 
   const handleOpenHistoryReanswer = (item) => {
     setReanswerModalItem(item)
@@ -753,21 +754,30 @@ export default function CoachPage() {
       )
       setReanswerFeedback({ ...feedbackData, earnedPoints: 0 })
 
-      const historyId = resolveHistoryItemId(reanswerModalItem)
-      if (historyId != null) {
-        updateInterviewHistoryEntry(historyId, {
+      const questionText = getHistoryQuestionText(reanswerModalItem)
+
+      recordInterviewResult(
+        {
           score: feedbackData.score,
           breakdown: feedbackData.breakdown,
           summary: feedbackData.summary,
-          answer: feedbackData.answer,
-          questionId: feedbackData.questionId,
+          answer: reanswerDraft.trim(),
+          question: questionText || feedbackData.question,
+          questionId: feedbackData.questionId ?? questionId,
+          historyId: `h-retake-${Date.now()}`,
+          category: reanswerModalItem.category,
+          source: reanswerModalItem.source === 'jobpost' ? 'jobpost' : undefined,
+          company: reanswerModalItem.company,
+          position: reanswerModalItem.position,
           strengths: feedbackData.strengths,
           improvements: feedbackData.improvements,
           recommendations: feedbackData.recommendations,
           earnedPoints: 0,
-          isRetake: true,
-        })
-      }
+        },
+        { skipRewards: true }
+      )
+
+      setCurrentPage(1)
     } catch (err) {
       setReanswerError(err?.message || '재답변 제출에 실패했습니다.')
     } finally {
@@ -786,6 +796,15 @@ export default function CoachPage() {
 
   const handleHistoryRetakeConsumed = useCallback(() => {
     setHistoryRetakeRequest(null)
+  }, [])
+
+  const handleMockRetakeSessionUpdated = useCallback((updatedSession) => {
+    if (!updatedSession?.sessionId) return
+    setMockHistorySeeds((prev) => {
+      const map = new Map(prev.map((item) => [String(item.sessionId), item]))
+      map.set(String(updatedSession.sessionId), updatedSession)
+      return Array.from(map.values())
+    })
   }, [])
 
   const handleVideoRetakeComplete = useCallback(
@@ -1020,7 +1039,7 @@ export default function CoachPage() {
               공고 분석
             </ProTab>
             <ProTab
-              isActive={activeTab === 'mock' || Boolean(historyRetakeRequest)}
+              isActive={activeTab === 'mock'}
               onClick={() => handleProTabClick('mock', 'mock')}
               feature="mock"
             >
@@ -1153,14 +1172,14 @@ export default function CoachPage() {
                     <p>{feedback.answer}</p>
                   </div>
 
-                  <button className="btn btn--primary btn--lg btn--block" onClick={handleNewQuestion}>
-                    새로운 질문 받기
+                  <button className="btn btn--primary btn--lg btn--block" onClick={handleConfirmPracticeFeedback}>
+                    확인
                   </button>
                 </Motion.div>
               )}
             </AnimatePresence>
           </div>
-        ) : activeTab === 'history' && !historyRetakeRequest ? (
+        ) : activeTab === 'history' ? (
           <div className="coach__history">
             {/* History Sub Tabs */}
             <div className="coach__history-subtabs">
@@ -1373,11 +1392,10 @@ export default function CoachPage() {
                   ) : (
                     <div className="coach__history-list mock-history__session-list">
                       {paginatedHistories.map((item, idx) => {
-                        const itemId = resolveHistoryItemId(item) ?? idx
                         const questionText = getHistoryQuestionText(item)
 
                         return (
-                          <div key={itemId} className="mock-history__session-card">
+                          <div key={`${item.date}-${idx}`} className="mock-history__session-card">
                             <div className="mock-history__session-card-header">
                               <div className="mock-history__session-card-meta">
                                 <span className="badge">{item.category || '경험'}</span>
@@ -1385,11 +1403,7 @@ export default function CoachPage() {
                                   <span className="coach__history-company">{item.company}</span>
                                 ) : null}
                                 <span className="coach__history-date">
-                                  {new Date(item.date).toLocaleDateString('ko-KR', {
-                                    year: 'numeric',
-                                    month: 'long',
-                                    day: 'numeric',
-                                  })}
+                                  {formatInterviewDateTime(item.date)}
                                 </span>
                               </div>
                               <div
@@ -1481,11 +1495,8 @@ export default function CoachPage() {
               </>
             )}
           </div>
-        ) : activeTab === 'mock' || historyRetakeRequest ? (
-          <div
-            className={`coach__mock${activeTab !== 'mock' && !historyRetakeRequest ? ' coach__mock--hidden' : ''}`}
-            aria-hidden={activeTab !== 'mock' && !historyRetakeRequest}
-          >
+        ) : activeTab === 'mock' ? (
+          <div className="coach__mock">
             {/* Pro 안내 배너 */}
             {!isPro && (
               <div className="coach__pro-notice">
@@ -1512,6 +1523,7 @@ export default function CoachPage() {
               historyRetakeRequest={historyRetakeRequest}
               onHistoryRetakeConsumed={handleHistoryRetakeConsumed}
               onVideoRetakeComplete={handleVideoRetakeComplete}
+              onRetakeSessionUpdated={handleMockRetakeSessionUpdated}
             />
           </div>
         ) : (
@@ -1921,7 +1933,7 @@ export default function CoachPage() {
                 <div>
                   <span className="badge">{selectedHistory.category || '경험'}</span>
                   <span className="coach__modal-date">
-                    {new Date(selectedHistory.date).toLocaleDateString('ko-KR')}
+                    {formatInterviewDateTime(selectedHistory.date)}
                   </span>
                 </div>
                 <button className="coach__modal-close" onClick={handleCloseDetail}>
