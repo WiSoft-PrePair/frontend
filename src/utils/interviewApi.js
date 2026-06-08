@@ -1115,12 +1115,10 @@ export function normalizeVideoInterviewHistoryList(response) {
     list = groupFlatVideoAnswersBySession(list)
   }
 
-  return filterRetakeChildSessions(
-    list
-      .map(normalizeVideoHistorySessionItem)
-      .filter(Boolean)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-  )
+  return list
+    .map(normalizeVideoHistorySessionItem)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
 }
 
 /** 화상 면접 기록 목록 조회 — GET `/interviews/sessions` */

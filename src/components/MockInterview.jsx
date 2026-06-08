@@ -9,7 +9,6 @@ import {
   getVideoInterviewSessionDetail,
   collectRetakeQuestionIdCandidates,
   loadRetakeSessionDetail,
-  registerRetakeChildSession,
   retryVideoInterviewQuestions,
   startVideoInterviewRetake,
   streamVideoInterviewResult,
@@ -329,8 +328,7 @@ export default function MockInterview({
   onVideoRetakeComplete,
   onRetakeSessionUpdated,
 }) {
-  const { getAccessToken, recordMockInterviewSession, updateMockInterviewSessionAfterRetake } =
-    useAppState()
+  const { getAccessToken, recordMockInterviewSession } = useAppState()
   const [phase, setPhase] = useState(() =>
     historyRetakeRequest?.requestId ? 'loading' : 'ready'
   ) // ready | loading | interview | analyzing | feedback
@@ -341,6 +339,7 @@ export default function MockInterview({
   const [isStartingRetake, setIsStartingRetake] = useState(false)
   const isStartingRetakeRef = useRef(false)
   const historyRetakeMetaRef = useRef(null)
+  const retakeParentSessionIdRef = useRef(null)
   const lastRetakeUpdatedSessionRef = useRef(null)
   const [isHistoryRetakeFeedback, setIsHistoryRetakeFeedback] = useState(false)
   const pendingUploadRef = useRef(null)
@@ -479,8 +478,7 @@ export default function MockInterview({
               questionRefs.flatMap((ref) => collectRetakeQuestionIdCandidates(ref)),
               accessToken
             )
-      registerRetakeChildSession(newSessionId, previousSessionId)
-
+      retakeParentSessionIdRef.current = String(previousSessionId)
       return { newSessionId, sortedIndexes }
     },
     [videoSessionId, getAccessToken, getQuestionIdAtIndex]
@@ -1286,51 +1284,24 @@ export default function MockInterview({
           videoUrl: q.videoUrl ?? null,
         })) ?? []
 
-      if (historyRetakeMeta?.sourceSessionId && historyRetakeMeta?.sourceQuestionId != null) {
-        const sourceQuestionIds = collectRetakeQuestionIdCandidates({
-          questionId: historyRetakeMeta.sourceQuestionId,
-          id: historyRetakeMeta.sourceQuestionId,
-        })
-        const retakeQuestion =
-          mappedQuestions.find((q) =>
-            collectRetakeQuestionIdCandidates(q).some((id) => sourceQuestionIds.includes(id))
-          ) ?? mappedQuestions[0]
-
-        const questionText =
-          historyRetakeMeta.questionText || retakeQuestion?.question || ''
-        const patchedQuestion = {
-          index: retakeQuestion?.index ?? 1,
-          questionId: historyRetakeMeta.sourceQuestionId,
-          question: questionText,
-          ...(retakeQuestion ?? {}),
-        }
-
-        const updatedSession = updateMockInterviewSessionAfterRetake({
-          sourceSessionId: historyRetakeMeta.sourceSessionId,
-          sourceQuestionId: historyRetakeMeta.sourceQuestionId,
-          questionText,
-          questionPatch: patchedQuestion,
-          overallScore: normalized.overallScore ?? retakeQuestion?.score ?? null,
-          summary: normalized.overallSummary || '',
-          sourceQuestionsSnapshot: historyRetakeMeta.sourceQuestions,
-          sourceSessionDate: historyRetakeMeta.sourceSessionDate,
-        })
-
-        if (updatedSession) {
-          lastRetakeUpdatedSessionRef.current = updatedSession
-          onRetakeSessionUpdated?.(updatedSession)
-        }
-      } else {
-        recordMockInterviewSession({
-          sessionId: videoSessionId,
-          date: new Date().toISOString(),
-          overallScore: normalized.overallScore ?? null,
-          summary: normalized.overallSummary || '',
-          questionCount: mappedQuestions.length,
-          questionsPreview: mappedQuestions.map((q) => q.question).filter(Boolean),
-          questions: mappedQuestions,
-        })
+      const parentSessionId =
+        historyRetakeMeta?.sourceSessionId ?? retakeParentSessionIdRef.current ?? null
+      const recordedSession = {
+        sessionId: videoSessionId,
+        date: new Date().toISOString(),
+        overallScore: normalized.overallScore ?? null,
+        summary: normalized.overallSummary || '',
+        questionCount: mappedQuestions.length,
+        questionsPreview: mappedQuestions.map((q) => q.question).filter(Boolean),
+        questions: mappedQuestions,
+        ...(parentSessionId
+          ? { isRetake: true, parentSessionId: String(parentSessionId) }
+          : {}),
       }
+      recordMockInterviewSession(recordedSession)
+      lastRetakeUpdatedSessionRef.current = recordedSession
+      onRetakeSessionUpdated?.(recordedSession)
+      retakeParentSessionIdRef.current = null
       setPhase('feedback')
     } catch (error) {
       if (error?.name === 'AbortError') {
@@ -1355,7 +1326,6 @@ export default function MockInterview({
     interviewReport,
     selectedQuestions,
     recordMockInterviewSession,
-    updateMockInterviewSessionAfterRetake,
     onVideoRetakeComplete,
     onRetakeSessionUpdated,
     stopCamera,
@@ -1533,8 +1503,6 @@ export default function MockInterview({
         const { sessionId: newSessionId } = prefetchedNewSessionId
           ? { sessionId: prefetchedNewSessionId }
           : await startVideoInterviewRetake(originalSessionId, questionId, accessToken)
-        registerRetakeChildSession(newSessionId, originalSessionId)
-
         historyRetakeMetaRef.current = {
           sourceSessionId: originalSessionId,
           sourceQuestionId: questionId,
@@ -1684,6 +1652,7 @@ export default function MockInterview({
       updatedSession: lastRetakeUpdatedSessionRef.current ?? undefined,
     })
     historyRetakeMetaRef.current = null
+    retakeParentSessionIdRef.current = null
     lastRetakeUpdatedSessionRef.current = null
   }, [stopCamera, stopAudioAnalysis, stopTTS, onVideoRetakeComplete])
 
@@ -1721,6 +1690,7 @@ export default function MockInterview({
     ttsEnabledRef.current = true
     setIsHistoryRetakeFeedback(false)
     historyRetakeMetaRef.current = null
+    retakeParentSessionIdRef.current = null
   }
 
   // 컴포넌트 언마운트 시 정리

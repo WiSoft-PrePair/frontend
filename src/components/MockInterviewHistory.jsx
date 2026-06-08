@@ -8,9 +8,7 @@ import {
   isInterviewFeedbackTripleEmpty,
   resolveInterviewMediaUrl,
   collectRetakeQuestionIdCandidates,
-  filterRetakeChildSessions,
   matchQuestionForRetake,
-  registerRetakeChildSession,
   startVideoInterviewRetake,
 } from '../utils/interviewApi'
 
@@ -178,10 +176,10 @@ function mergeApiHistoryLists(previousList, incomingList) {
 
 function mergeMockHistories(apiList, localList) {
   const map = new Map()
-  for (const item of filterRetakeChildSessions(localList)) {
+  for (const item of localList) {
     if (item?.sessionId) map.set(String(item.sessionId), { ...item, source: item.source || 'local' })
   }
-  for (const item of filterRetakeChildSessions(apiList)) {
+  for (const item of apiList) {
     if (!item?.sessionId) continue
     const key = String(item.sessionId)
     const existing = map.get(key)
@@ -602,8 +600,6 @@ export default function MockInterviewHistory({
           matchedQuestion,
           accessToken
         )
-        registerRetakeChildSession(newSessionId, sessionId)
-
         const retakeQuestionId =
           questionIds[0] ??
           matchedQuestion.retakeQuestionId ??

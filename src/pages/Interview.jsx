@@ -689,6 +689,9 @@ export default function CoachPage() {
   const handleConfirmPracticeFeedback = () => {
     setFeedback(null)
     setAnswer('')
+    setHistorySubTab('general')
+    setSearchParams({ tab: 'history', historySub: 'general' }, { replace: true })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const getScoreColor = (score) => {
